@@ -1,5 +1,6 @@
 import { MARD_291_PALETTE_VERSION } from './version'
 import type { Palette, PaletteEntry } from './types'
+import { assertValidPalette } from './validate'
 
 // Imported from maxcleme/beadcolors raw/mard.csv at a fixed commit.
 // RGB is public reference data; Lab is derived by the documented sRGB -> CIELAB D65 rule.
@@ -2929,3 +2930,5 @@ export const MARD_291_PALETTE: Palette = Object.freeze({
   entries,
   byColorId,
 })
+
+assertValidPalette(MARD_291_PALETTE)
