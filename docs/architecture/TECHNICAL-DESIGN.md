@@ -8,13 +8,13 @@
 | 版本 | V1 |
 | 平台 | PC Web |
 | 产品需求依据 | [`docs/product/PRD-V1.md`](../product/PRD-V1.md) |
-| 官方拼豆色卡 | MARD 291 色完整色卡 |
+| 拼豆色卡范围 | MARD 291 色完整色卡（MARD 色号体系） |
 | 文档状态 | 已同步产品正式规则，待技术实现 |
 | 本文职责 | 定义 V1 技术上怎么实现，不改变产品需求 |
 
 > 本文只设计技术方案，不初始化项目、不安装依赖、不创建页面、不编写业务代码，也不拆解 V1 开发任务。
 >
-> 本文中所有“291 色”均指 MARD 291 色完整色卡；除表示数量或索引范围外，不得解释为其他色卡。
+> 本文中所有“291 色”均指 MARD 291 色完整色卡；除表示数量或索引范围外，不得解释为其他色卡。V1 的 RGB/HEX/Lab 是版本锁定的公开数字参考数据或其派生数据，不默认等同于 MARD 制造商官方标准数字色值。
 
 ## 1. 方案结论
 
@@ -305,32 +305,56 @@ Palette
 
 PaletteEntry
 ├─ paletteIndex: number               // 1..291，仅运行时索引
-├─ colorId: string                    // 稳定唯一标识，例如 A25
-├─ displayCode: string                // MARD 色号；如与 colorId 相同则不重复维护
+├─ colorId: string                    // 稳定唯一领域标识，与 displayCode 概念分离
+├─ displayCode: string                // 采用的 MARD 色号体系中的展示代码
 ├─ name: string
-├─ rgb: { r: 0..255, g: 0..255, b: 0..255 }
-├─ hex: string                        // 预览和渲染用
-├─ lab: { l: number, a: number, b: number }
-└─ family: string                     // 色系分类
+├─ rgb: { r: 0..255, g: 0..255, b: 0..255 } // 版本锁定的公开数字参考
+├─ hex: string                        // RGB 的屏幕显示表示
+├─ lab: { l: number, a: number, b: number } // 可由 RGB 派生
+└─ family: string                     // 产品派生的 MARD 系列分类
 ```
 
-`colorId` 是最终业务标识，RGB、HEX、Lab 都只是匹配和展示数据，不能写入 Grid 作为最终颜色。
+`Palette.source = 'MARD'` 表示该 Palette 采用 MARD 291 色号体系，不表示其中的 RGB/HEX 是 MARD 制造商官方标准数字色值。
+
+`colorId` 是最终业务标识，`paletteIndex` 是 Grid 内部编码，`displayCode` 是采用的 MARD 色号体系代码；三者必须保持概念分离。RGB、HEX、Lab 都只是匹配和展示数据，不能写入 Grid 作为最终颜色。除非来源明确提供并经过核验，RGB/HEX 不得描述为 MARD 官方标准数字色值；由 RGB 计算的 Lab 必须标记为系统派生数据。
 
 ### 7.2 单一色卡数据源
 
 - 只允许存在一份版本化的 MARD 291 色 Palette 数据文件。
 - 生成、选色组件、颜色搜索、颜色高亮、统计、PNG 和 PDF 都从同一 Palette 实例读取。
 - 不允许在组件中硬编码色号、RGB 或颜色名称。
-- 应在正式落库前和构建 / 测试阶段校验：来源确认为 MARD、恰好 291 条、`colorId` 唯一、MARD 色号完整、`paletteIndex` 连续、RGB 合法、Lab 可复现、每个色系有效。
+- 应在正式落库前和构建 / 测试阶段校验：来源和固定版本可追溯、恰好 291 条、`colorId` 唯一、采用的 MARD 色号完整、`paletteIndex` 连续、RGB 合法、Lab 可复现、每个色系有效。
 - 每个 Project 保存 `paletteVersion`，防止将来色卡数据变化后误读旧 Grid。
 
-MARD 291 色的真实色值属于高风险基础数据。正式落库前必须进行一次数据来源和色号完整性核验。本次只更新规则，不抓取、录入或生成 MARD 291 色数据。
+MARD 291 色的数字参考数据属于高风险基础数据。正式落库前必须进行数据来源、固定版本和色号完整性核验。V1 采用版本锁定的公开参考数据时，必须明确其不是 MARD 官方 RGB/HEX 标准；正式数据由 TASK-015 导入本地资源，本次实现不运行时联网读取。
+
+### 7.2.1 版本锁定与数据溯源
+
+production Palette 必须拥有稳定的 `paletteVersion`，并能够追溯到：
+
+- 数据来源；
+- 固定 commit 或等价的数据版本；
+- 拼豆工坊自身的处理版本。
+
+生产构建不得直接读取 GitHub `main` / `master` 的最新数据，也不得在每次构建时自动拉取上游色卡。上游数据变化不能无版本地改变已有作品中颜色的含义。任何数据升级都必须显式升级 `paletteVersion`，重新执行来源、完整性和冲突核验，并记录变更。
+
+当前 production Palette 的 `paletteVersion` 为：
+
+`MARD-291-community-maxcleme-beadcolors-29229889daab404fb30531d4bb785fd73f7f58e3-import-v1`
+
+它由上游仓库、固定 commit 和拼豆工坊导入处理版本组成。具体来源、原始文件路径、许可证、`paletteIndex`、`colorId`、`Z/ZG` 和派生字段规则记录在 [`MARD-291-VERIFICATION.md`](./MARD-291-VERIFICATION.md) 中。
+
+本次导入的 Lab 使用确定性的 sRGB → CIELAB D65 规则：sRGB 通道按标准 gamma 分段线性化，使用 D65 XYZ 矩阵与 D65 白点 `Xn=0.95047`、`Yn=1`、`Zn=1.08883`，再按 CIELAB epsilon/kappa 分段函数计算。该 Lab 是拼豆工坊基于公开 RGB 参考值的派生数据，不是 MARD 官方原始测色值。
+
+`family` 使用产品派生的稳定系列分组 `series:A`、`series:B`、`series:C`、`series:D`、`series:E`、`series:F`、`series:G`、`series:H`、`series:M`、`series:P`、`series:Q`、`series:R`、`series:T`、`series:Y`、`series:ZG`，不是 MARD 官方分类。
+
+当前 production Lab 已静态写入 Palette。未来如果新增 Palette importer 或重新生成 Lab，必须继续使用固定系列/编号映射，禁止根据 CSV 行号分配 `paletteIndex`；任何索引映射变化都必须显式升级 `paletteVersion`。重新生成 Lab 前，还必须将完整的 sRGB linearization、RGB→XYZ 矩阵、D65 white point、epsilon/kappa、XYZ→Lab 公式以及已知 RGB→Lab 参考点测试固化到代码和测试中。上述属于后续可复现性工作，不影响当前静态 production Palette。
 
 ### 7.3 最近颜色匹配
 
 V1 采用确定性的 CIELAB D65 + ΔE76：
 
-1. Palette 文件预先保存每个颜色的 Lab 值。
+1. Palette 文件预先保存每个颜色的 Lab 值；若 Lab 由公开 RGB 参考值计算，必须记录为系统派生数据，而非 MARD 官方原始测色值。
 2. 输入像素从 sRGB 转换为 Lab。
 3. 遍历 291 个 Palette entry，计算 Lab 欧氏距离平方。
 4. 选择距离最小的 `paletteIndex`。
@@ -1013,7 +1037,7 @@ tests/
 
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
-| MARD 291 色真实数据不准确或版本不明确 | 所有生成、编辑、统计和图纸都可能失去实际制作价值 | 正式落库前核验 MARD 数据来源和色号完整性；构建时做恰好 291 条、唯一性和字段合法性校验；Project 固定 paletteVersion |
+| MARD 291 色号或数字参考数据不准确、来源不清或版本不明确 | 所有生成、编辑、统计和图纸都可能失去实际制作价值 | 正式落库前核验采用的 MARD 色号体系、固定公开数据来源、commit、完整性和冲突；构建时做恰好 291 条、唯一性和字段合法性校验；Project 固定 `paletteVersion`，并明确 RGB/HEX 不是官方标准数字色值 |
 | 拼豆优化算法质量不足 | 可能出现大量杂色、轮廓丢失或结果与高清模式无明显差异 | 先用纯规则和固定夹具；每个阶段单测；用 PRD 验收样例持续调参，不引入不可解释的 AI |
 | 浏览器图片处理和内存压力 | 大图或大 Grid 可能卡顿、崩溃或导致标签页被系统回收 | Worker 处理、目标尺寸重采样、释放中间对象、历史上限、压力测试和明确错误状态 |
 | Canvas 大作品交互性能 | 缩放、拖动、色号和高亮同时开启时可能掉帧 | 可见区域绘制、requestAnimationFrame、低倍率隐藏文字、renderer 与 Vue 响应式层解耦；必要时再局部优化 |
@@ -1041,7 +1065,7 @@ tests/
 
 以下正式产品规则已同步到 PRD，技术实现必须以此为准：
 
-1. **MARD 291 色**：Palette 是全系统唯一的 MARD 291 色事实来源。正式落库前必须核验数据来源、色号完整性和字段准确性；本次不抓取、录入或生成色卡数据。
+1. **MARD 291 色**：Palette 是全系统唯一的 MARD 291 色号体系和数字参考数据事实来源。V1 采用版本锁定的公开数字参考值；该数字数据不是 MARD 制造商官方 RGB/HEX 标准。正式 Palette 已由 TASK-015 导入本地资源，必须继续核验来源、固定版本、色号完整性和字段准确性。
 2. **半透明 PNG**：alpha=0 转为 EMPTY；alpha>0 不视为空白，其中半透明像素先与白色背景合成，再映射到 MARD 291 色。Alpha 合成必须是独立可测试纯函数。
 3. **作品宽度**：统一配置为最小 8、最大 256、默认 64，快捷值 32、48、64、96；高度按最终裁剪比例计算，不新增总格数产品上限。
 4. **当前会话恢复**：IndexedDB 只保存当前作品状态，包括可恢复原图、裁剪信息、尺寸、模式、Palette 版本、Grid、作品名称和必要数据，不保存瞬时 UI 状态，也不形成作品库。
@@ -1050,7 +1074,7 @@ tests/
 
 ### 20.1 尚未确认的产品问题
 
-当前暂无需要产品负责人另行决定的产品问题。总格数性能安全上限明确不作为当前产品固定限制，待压力测试后作为工程建议和风险报告处理。
+产品负责人已确认采用“版本锁定的公开数字参考”方案，TASK-015 已按该方案完成本地导入。导入记录仍必须保留数据来源和固定 commit、`paletteVersion`、`Z` / `ZG` 等未解决的色号口径，以及 RGB/HEX、Lab 和 family 的来源属性；不得静默选择或把公开参考值描述为 MARD 官方标准。总格数性能安全上限明确不作为当前产品固定限制，待压力测试后作为工程建议和风险报告处理。
 
 ## 21. 审核结论
 
