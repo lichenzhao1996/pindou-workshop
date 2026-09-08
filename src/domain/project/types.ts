@@ -1,4 +1,5 @@
 import type { BEAD_SIZE_MM, CURRENT_PROJECT_SCHEMA_VERSION } from './constants'
+import type { Grid } from './grid'
 
 export type ProjectSchemaVersion = typeof CURRENT_PROJECT_SCHEMA_VERSION
 export type ProjectVersion = number
@@ -40,11 +41,7 @@ export interface GenerationState {
   algorithmVersion: string
 }
 
-/** Minimal Project-side metadata; the Uint16Array Grid is implemented in TASK-009. */
-export interface GridReference {
-  width: number
-  height: number
-}
+export type GridReference = Grid
 
 export interface Project {
   /** Data shape version used to select future schema migrations. */
