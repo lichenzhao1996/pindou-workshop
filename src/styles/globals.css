@@ -1,0 +1,44 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--color-page-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+  font-size: 16px;
+  line-height: var(--line-height-body);
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-width: var(--breakpoint-pc-min);
+  min-height: 100vh;
+  margin: 0;
+  background: var(--color-page-background);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+#app {
+  min-height: 100vh;
+}
