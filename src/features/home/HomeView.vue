@@ -78,10 +78,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUploadStore } from '../../app/stores/uploadStore'
-import { createImageInput } from '../upload'
+import { inspectImageInput } from '../upload'
 
 const steps = [
   {
@@ -108,17 +108,22 @@ function openFilePicker() {
   fileInput.value?.click()
 }
 
-async function processSelectedFile(selectedFile: File | null) {
-  const imageInput = createImageInput(selectedFile)
-  if (!imageInput) {
-    if (selectedFile) {
-      errorMessage.value = '文件格式不支持，请选择 JPG、PNG 或 WEBP 图片。'
-    }
+async function processSelectedFile(
+  selectedFile: Blob | null,
+  originalFileNameOverride?: string | null,
+) {
+  const inspection = await inspectImageInput(selectedFile, originalFileNameOverride)
+  if (!inspection) {
+    return
+  }
+
+  if (inspection.status === 'invalid') {
+    errorMessage.value = inspection.message
     return
   }
 
   errorMessage.value = null
-  uploadStore.setPendingInput(imageInput)
+  uploadStore.setPendingInput(inspection.input, inspection.warnings, inspection.dimensions)
   await router.push({ name: 'crop' })
 }
 
@@ -161,6 +166,32 @@ async function handleDrop(event: DragEvent) {
   isDragging.value = false
   await processSelectedFile(event.dataTransfer?.files[0] ?? null)
 }
+
+function getPastedImage(event: ClipboardEvent): Blob | null {
+  const imageItem = Array.from(event.clipboardData?.items ?? []).find((item) =>
+    item.type.toLowerCase().startsWith('image/'),
+  )
+
+  return imageItem?.getAsFile() ?? null
+}
+
+async function handlePaste(event: ClipboardEvent) {
+  const pastedImage = getPastedImage(event)
+  if (!pastedImage) {
+    return
+  }
+
+  event.preventDefault()
+  await processSelectedFile(pastedImage, null)
+}
+
+onMounted(() => {
+  window.addEventListener('paste', handlePaste)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('paste', handlePaste)
+})
 </script>
 
 <style scoped>

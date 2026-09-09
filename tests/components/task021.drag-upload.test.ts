@@ -2,8 +2,20 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { defineComponent } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import HomeView from '../../src/features/home/HomeView.vue'
+
+beforeEach(() => {
+  vi.stubGlobal('createImageBitmap', async () => ({
+    width: 300,
+    height: 300,
+    close: vi.fn(),
+  }))
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function createTestRouter() {
   return createRouter({

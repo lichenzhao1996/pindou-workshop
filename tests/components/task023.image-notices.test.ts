@@ -4,19 +4,8 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUploadStore } from '../../src/app/stores/uploadStore'
+import CropView from '../../src/features/crop/CropView.vue'
 import HomeView from '../../src/features/home/HomeView.vue'
-
-beforeEach(() => {
-  vi.stubGlobal('createImageBitmap', async () => ({
-    width: 300,
-    height: 300,
-    close: vi.fn(),
-  }))
-})
-
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
 
 function createTestRouter() {
   return createRouter({
@@ -37,48 +26,58 @@ async function mountHome() {
   const router = createTestRouter()
   await router.push('/')
   await router.isReady()
-  const wrapper = mount(HomeView, { global: { plugins: [pinia, router] } })
+  const wrapper = mount(HomeView, {
+    global: { plugins: [pinia, router] },
+  })
 
   return { pinia, router, wrapper }
 }
 
-describe('TASK-020 home image selection', () => {
-  it('stores a supported file and navigates to the crop route', async () => {
+beforeEach(() => {
+  vi.stubGlobal('createImageBitmap', async () => ({
+    width: 100,
+    height: 100,
+    close: vi.fn(),
+  }))
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('TASK-023 image notices', () => {
+  it('stores warnings, continues to crop, and displays them on the crop route', async () => {
     const { pinia, router, wrapper } = await mountHome()
-    const file = new File(['image'], 'photo.jpg', { type: 'image/jpeg' })
+    const file = new File(['image'], 'small.png', { type: 'image/png' })
     const input = wrapper.get('[data-testid="image-file-input"]')
 
     Object.defineProperty(input.element, 'files', { value: [file] })
     await input.trigger('change')
     await flushPromises()
 
+    const store = useUploadStore(pinia)
     expect(router.currentRoute.value.name).toBe('crop')
-    expect(useUploadStore(pinia).pendingInput?.originalImage).toBe(file)
-    expect(useUploadStore(pinia).pendingInput?.originalFileName).toBe('photo.jpg')
+    expect(store.pendingWarnings.map((warning) => warning.code)).toEqual(['low-resolution'])
+
+    const cropWrapper = mount(CropView, { global: { plugins: [pinia] } })
+    expect(cropWrapper.get('[role="status"]').text()).toContain('图片分辨率较低')
   })
 
-  it('shows a clear error and does not navigate for unsupported files', async () => {
+  it('keeps decode errors on the home route and shows a readable message', async () => {
+    vi.stubGlobal('createImageBitmap', async () => {
+      throw new Error('decode failed')
+    })
     const { router, wrapper } = await mountHome()
+    const file = new File(['broken'], 'broken.png', { type: 'image/png' })
     const input = wrapper.get('[data-testid="image-file-input"]')
-    const file = new File(['text'], 'notes.txt', { type: 'text/plain' })
 
     Object.defineProperty(input.element, 'files', { value: [file] })
     await input.trigger('change')
+    await flushPromises()
 
+    expect(router.currentRoute.value.name).toBe('home')
     expect(wrapper.get('[role="alert"]').text()).toBe(
-      '文件格式不支持，请选择 JPG、PNG 或 WEBP 图片。',
+      '图片无法读取，请选择有效的 JPG、PNG 或 WEBP 图片。',
     )
-    expect(router.currentRoute.value.name).toBe('home')
-  })
-
-  it('does nothing when the user cancels the file chooser', async () => {
-    const { router, wrapper } = await mountHome()
-    const input = wrapper.get('[data-testid="image-file-input"]')
-
-    Object.defineProperty(input.element, 'files', { value: [] })
-    await input.trigger('change')
-
-    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
-    expect(router.currentRoute.value.name).toBe('home')
   })
 })

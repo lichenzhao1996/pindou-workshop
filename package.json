@@ -22,6 +22,7 @@
     "check": "npm run lint && npm run format:check && npm run test && npm run test:unit && npm run test:component && npm run type-check && npm run build && npm run test:e2e && npm run smoke"
   },
   "dependencies": {
+    "cropperjs": "^1.6.2",
     "pinia": "^4.0.3",
     "vue": "^3.5.41",
     "vue-router": "^5.2.0"

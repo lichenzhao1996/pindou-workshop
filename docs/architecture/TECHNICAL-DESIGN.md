@@ -233,6 +233,16 @@ EditorState
 
 整个编辑器只保留一个 `activePaletteIndex`。UI 可以显示对应的 `colorId`，但最终写入 Grid 的仍然是 Palette 中的合法索引。
 
+### 5.5 图片输入检查
+
+图片输入通过统一的纯函数检查格式、解码结果和尺寸。尺寸判断只产生可继续的 warning，不作为上传硬限制：
+
+- 低分辨率：`width < 128 || height < 128`。
+- 超大图片：`width × height > 24,000,000` 或 `max(width, height) > 8192`。
+- 极端宽高比：`max(width / height, height / width) > 4`。
+
+多个条件可以同时产生 warning。V1 不增加文件字节数、总像素数或宽高的额外产品硬上限；图片解码失败或无法取得有效正整数尺寸时返回错误并停止正常流程。TASK-023 只负责提示，不在此阶段进行缩放、压缩或其他大图预处理。
+
 ## 6. Grid 数据结构
 
 ### 6.1 方案比较

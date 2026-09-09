@@ -1,5 +1,6 @@
 export * from './constants'
 export * from './createProject'
+export * from './cropState'
 export * from './grid'
 export * from './history'
 export * from './operations'
