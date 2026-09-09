@@ -1,4 +1,5 @@
 export * from './constants'
+export * from './crop'
 export * from './createProject'
 export * from './cropState'
 export * from './grid'

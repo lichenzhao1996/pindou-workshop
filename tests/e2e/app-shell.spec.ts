@@ -44,6 +44,77 @@ test('uploads a supported JPG through the home entry and opens the crop route', 
 
   await expect(page).toHaveURL(/\/crop$/)
   await expect(page.getByRole('heading', { name: '确认图片范围' })).toBeVisible()
+  await expect(page.locator('.cropper-container')).toBeVisible()
+  await expect(page.locator('.cropper-crop-box')).toBeVisible()
+})
+
+test('allows the crop box to resize and move without a fixed aspect ratio', async ({ page }) => {
+  await page.goto('/')
+  await page.setInputFiles('[data-testid="image-file-input"]', {
+    name: 'photo.jpg',
+    mimeType: 'image/jpeg',
+    buffer: ONE_PIXEL_PNG,
+  })
+
+  const cropBox = page.locator('.cropper-crop-box')
+  const resizeHandle = page.locator('.cropper-point.point-se')
+  await expect(cropBox).toBeVisible()
+  await expect(resizeHandle).toBeVisible()
+
+  const initialBox = await cropBox.boundingBox()
+  const handleBox = await resizeHandle.boundingBox()
+  if (!initialBox || !handleBox) {
+    throw new Error('expected Cropper crop box geometry')
+  }
+
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(
+    handleBox.x + handleBox.width / 2 - 24,
+    handleBox.y + handleBox.height / 2 - 12,
+  )
+  await page.mouse.up()
+
+  await expect
+    .poll(async () => (await cropBox.boundingBox())?.width ?? 0)
+    .toBeLessThan(initialBox.width)
+
+  const resizedBox = await cropBox.boundingBox()
+  if (!resizedBox) {
+    throw new Error('expected resized Cropper crop box geometry')
+  }
+
+  await page.mouse.move(resizedBox.x + resizedBox.width / 2, resizedBox.y + resizedBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizedBox.x + resizedBox.width / 2 + 16, resizedBox.y + 8)
+  await page.mouse.up()
+
+  await expect.poll(async () => (await cropBox.boundingBox())?.x ?? 0).not.toBe(resizedBox.x)
+})
+
+test('rotates the crop view by 90 degrees without leaving the crop route', async ({ page }) => {
+  await page.goto('/')
+  await page.setInputFiles('[data-testid="image-file-input"]', {
+    name: 'photo.jpg',
+    mimeType: 'image/jpeg',
+    buffer: ONE_PIXEL_PNG,
+  })
+
+  const canvasImage = page.locator('.cropper-canvas img')
+  await expect(page.locator('.cropper-container')).toBeVisible()
+  await expect(page.locator('.cropper-crop-box')).toBeVisible()
+  await expect(canvasImage).toBeVisible()
+  const initialTransform = await canvasImage.evaluate(
+    (element) => getComputedStyle(element).transform,
+  )
+
+  await page.getByRole('button', { name: '向右旋转 90°' }).click()
+  await expect
+    .poll(async () => {
+      return canvasImage.evaluate((element) => getComputedStyle(element).transform)
+    })
+    .not.toBe(initialTransform)
+  await expect(page).toHaveURL(/\/crop$/)
 })
 
 test('uploads a supported PNG by dragging it to the home entry', async ({ page }) => {
@@ -86,4 +157,29 @@ test('continues to the crop route while showing a low-resolution warning', async
   await expect(page.getByRole('status', { name: '图片提示' })).toContainText(
     '图片分辨率较低，生成后细节可能不足，但仍可继续。',
   )
+})
+
+test('confirms the crop and restores the confirmed range when returning to crop', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.setInputFiles('[data-testid="image-file-input"]', {
+    name: 'photo.png',
+    mimeType: 'image/png',
+    buffer: ONE_PIXEL_PNG,
+  })
+
+  await expect(page.getByTestId('crop-confirm')).toBeEnabled()
+  await page.getByTestId('crop-confirm').click()
+  await expect(page.getByTestId('crop-confirmation-status')).toContainText('裁剪已确认')
+
+  await page.goBack()
+  await expect(
+    page.getByRole('heading', { name: '把你的图片，变成可以直接制作的拼豆图纸' }),
+  ).toBeVisible()
+  await page.goForward()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.locator('.cropper-container')).toBeVisible()
+  await expect(page.locator('.cropper-crop-box')).toBeVisible()
+  await expect(page.getByTestId('crop-confirm')).toBeEnabled()
 })
