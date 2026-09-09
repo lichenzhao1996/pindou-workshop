@@ -88,7 +88,7 @@ function assertGeneration(value: unknown): asserts value is GenerationState {
       `Project generation widthBeads must be from ${MIN_GRID_WIDTH} to ${MAX_GRID_WIDTH}`,
     )
   }
-  assertInteger(value.heightBeads, 'Project generation heightBeads', 0)
+  assertInteger(value.heightBeads, 'Project generation heightBeads', 1)
   if (value.beadSizeMm !== BEAD_SIZE_MM) {
     throw new RangeError(`Project generation beadSizeMm must be ${BEAD_SIZE_MM}`)
   }

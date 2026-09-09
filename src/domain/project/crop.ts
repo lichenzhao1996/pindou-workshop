@@ -1,4 +1,5 @@
 import { cropDataToState, cropStateToData } from './cropState'
+import { deriveGenerationDimensions } from '../generation'
 import type { CropImageBounds } from './cropState'
 import type { CropState, Project, Source } from './types'
 
@@ -67,9 +68,15 @@ export function confirmProjectCrop(project: Project, crop: CropState, now?: Date
     return project
   }
 
+  const dimensions = deriveGenerationDimensions(project.generation.widthBeads, normalizedCrop)
+
   return {
     ...project,
     crop: normalizedCrop,
+    generation: {
+      ...project.generation,
+      heightBeads: dimensions.heightBeads,
+    },
     grid: null,
     updatedAt: (now ?? new Date()).toISOString(),
   }

@@ -43,7 +43,7 @@
         <button
           type="button"
           data-testid="crop-confirm"
-          :disabled="!cropState"
+          :disabled="!cropState || widthError !== null"
           @click="confirmCurrentCrop"
         >
           确认裁剪
@@ -64,6 +64,93 @@
       <RouterLink to="/">返回首页</RouterLink>
     </section>
 
+    <section
+      v-if="cropState"
+      class="generation-settings"
+      aria-labelledby="generation-settings-title"
+    >
+      <header>
+        <p class="eyebrow">生成设置</p>
+        <h2 id="generation-settings-title">设置作品尺寸</h2>
+      </header>
+
+      <div class="width-setting">
+        <label for="grid-width-input">作品宽度（颗）</label>
+        <input
+          id="grid-width-input"
+          data-testid="grid-width-input"
+          :value="widthInput"
+          inputmode="numeric"
+          type="text"
+          aria-describedby="grid-width-help"
+          @input="handleWidthInput"
+        />
+        <p id="grid-width-help" class="field-help">
+          可输入 {{ MIN_GRID_WIDTH }}～{{ MAX_GRID_WIDTH }} 颗，高度将根据裁剪比例自动计算。
+        </p>
+        <p v-if="widthError" data-testid="grid-width-error" class="field-error" role="alert">
+          {{ widthError }}
+        </p>
+      </div>
+
+      <div class="width-presets" aria-label="宽度快捷值">
+        <button
+          v-for="preset in QUICK_GRID_WIDTHS"
+          :key="preset"
+          type="button"
+          :data-testid="`grid-width-preset-${preset}`"
+          :aria-pressed="validWidthBeads === preset"
+          @click="applyWidth(preset)"
+        >
+          {{ preset }}
+        </button>
+      </div>
+
+      <fieldset class="mode-setting" data-testid="generation-mode-selector">
+        <legend>生成模式</legend>
+        <label v-for="mode in GENERATION_MODES" :key="mode">
+          <input
+            :data-testid="`generation-mode-${mode}`"
+            type="radio"
+            name="generation-mode"
+            :value="mode"
+            :checked="selectedMode === mode"
+            @change="selectMode(mode)"
+          />
+          {{ GENERATION_MODE_LABELS[mode] }}
+        </label>
+        <p class="field-help">默认使用拼豆优化模式；切换后将按所选模式请求生成。</p>
+      </fieldset>
+
+      <dl v-if="generationDimensions" class="dimension-summary" data-testid="generation-dimensions">
+        <div>
+          <dt>拼豆尺寸</dt>
+          <dd data-testid="grid-bead-dimensions">
+            {{ generationDimensions.widthBeads }} × {{ generationDimensions.heightBeads }} 颗
+          </dd>
+        </div>
+        <div>
+          <dt>实际成品尺寸</dt>
+          <dd data-testid="physical-dimensions">
+            {{ formatCentimeters(generationDimensions.physical.widthCm) }}cm ×
+            {{ formatCentimeters(generationDimensions.physical.heightCm) }}cm
+          </dd>
+        </div>
+      </dl>
+
+      <div
+        v-if="generationDimensions?.warnings.length"
+        class="generation-warnings"
+        data-testid="generation-warnings"
+        role="status"
+        aria-label="尺寸风险提示"
+      >
+        <p v-for="warning in generationDimensions.warnings" :key="warning.code">
+          {{ warning.message }}
+        </p>
+      </div>
+    </section>
+
     <div
       v-if="uploadStore.pendingWarnings.length"
       class="image-warnings"
@@ -79,11 +166,15 @@
 
 <script setup lang="ts">
 import 'cropperjs/dist/cropper.css'
-import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
 import { useUploadStore } from '../../app/stores/uploadStore'
 import {
+  DEFAULT_GRID_WIDTH,
+  MAX_GRID_WIDTH,
+  MIN_GRID_WIDTH,
+  QUICK_GRID_WIDTHS,
   confirmCrop as confirmCropState,
   confirmProjectCrop,
   createFullImageCropState,
@@ -92,6 +183,16 @@ import {
   type CropPreviewInput,
   type Source,
 } from '../../domain/project'
+import {
+  DEFAULT_GENERATION_MODE,
+  deriveGenerationDimensions,
+  GENERATION_MODE_LABELS,
+  GENERATION_MODES,
+  isValidGridWidth,
+  updateProjectGenerationMode,
+  updateProjectGenerationSize,
+} from '../../domain/generation'
+import type { GenerationMode } from '../../domain/project'
 import type { ImageDimensions, ImageInput } from '../upload'
 import {
   createCropperAdapter,
@@ -109,7 +210,23 @@ const cropState = shallowRef<CropState | null>(null)
 const confirmedPreviewInput = shallowRef<CropPreviewInput | null>(null)
 const confirmationMessage = shallowRef<string | null>(null)
 const sourceImageUrl = shallowRef<string | null>(null)
+const widthInput = ref(String(DEFAULT_GRID_WIDTH))
+const validWidthBeads = ref(DEFAULT_GRID_WIDTH)
+const selectedMode = shallowRef<GenerationMode>(DEFAULT_GENERATION_MODE)
+const widthError = shallowRef<string | null>(null)
 let initializationToken = 0
+
+const generationDimensions = computed(() => {
+  if (!cropState.value || !isValidGridWidth(validWidthBeads.value)) {
+    return null
+  }
+
+  return deriveGenerationDimensions(validWidthBeads.value, cropState.value)
+})
+
+function formatCentimeters(value: number): string {
+  return Number(value.toFixed(2)).toString()
+}
 
 function destroyCropper() {
   cropper.value?.destroy()
@@ -168,6 +285,64 @@ function createSource(input: ImageInput, dimensions: ImageDimensions): Source {
   }
 }
 
+function findMatchingProject(input: ImageInput, dimensions: ImageDimensions) {
+  const project = projectStore.currentProject
+  return project && sourceMatchesInput(project.source, input, dimensions) ? project : null
+}
+
+function resetWidth(input: ImageInput | null, dimensions: ImageDimensions | null) {
+  const matchingProject = input && dimensions ? findMatchingProject(input, dimensions) : null
+  const nextWidth = matchingProject?.generation.widthBeads ?? DEFAULT_GRID_WIDTH
+  widthInput.value = String(nextWidth)
+  validWidthBeads.value = nextWidth
+  widthError.value = null
+}
+
+function resetMode(input: ImageInput | null, dimensions: ImageDimensions | null) {
+  const matchingProject = input && dimensions ? findMatchingProject(input, dimensions) : null
+  selectedMode.value = matchingProject?.generation.mode ?? DEFAULT_GENERATION_MODE
+}
+
+function selectMode(mode: GenerationMode) {
+  selectedMode.value = mode
+}
+
+function applyWidth(widthBeads: number) {
+  if (!isValidGridWidth(widthBeads)) {
+    widthError.value = `作品宽度必须是 ${MIN_GRID_WIDTH}～${MAX_GRID_WIDTH} 之间的整数。`
+    return
+  }
+
+  widthInput.value = String(widthBeads)
+  validWidthBeads.value = widthBeads
+  widthError.value = null
+
+  const currentProject = projectStore.currentProject
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  if (
+    currentProject &&
+    input &&
+    dimensions &&
+    sourceMatchesInput(currentProject.source, input, dimensions)
+  ) {
+    projectStore.setCurrentProject(updateProjectGenerationSize(currentProject, widthBeads))
+  }
+}
+
+function handleWidthInput(event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  widthInput.value = value
+  const parsed = Number(value)
+
+  if (!value.trim() || !isValidGridWidth(parsed)) {
+    widthError.value = `作品宽度必须是 ${MIN_GRID_WIDTH}～${MAX_GRID_WIDTH} 之间的整数。`
+    return
+  }
+
+  applyWidth(parsed)
+}
+
 async function initializeCropper(inputToken: number, preferredCrop?: CropState) {
   await nextTick()
   if (inputToken !== initializationToken || !imageElement.value) {
@@ -206,10 +381,19 @@ function confirmCurrentCrop() {
   const confirmation = confirmCropState({ source, crop: currentCrop }, dimensions)
   const currentProject = projectStore.currentProject
 
-  const nextProject =
+  const projectWithCropAndSize =
     currentProject && sourcesMatch(currentProject.source, source)
-      ? confirmProjectCrop(currentProject, confirmation.crop)
-      : createProject({ source, crop: confirmation.crop })
+      ? updateProjectGenerationSize(
+          confirmProjectCrop(currentProject, confirmation.crop),
+          validWidthBeads.value,
+        )
+      : createProject({
+          source,
+          crop: confirmation.crop,
+          widthBeads: validWidthBeads.value,
+          mode: selectedMode.value,
+        })
+  const nextProject = updateProjectGenerationMode(projectWithCropAndSize, selectedMode.value)
 
   projectStore.setCurrentProject(nextProject)
   confirmedPreviewInput.value = {
@@ -272,11 +456,15 @@ watch(
     cropState.value = null
     confirmedPreviewInput.value = null
     confirmationMessage.value = null
+    resetWidth(null, null)
+    resetMode(null, null)
 
     if (!input) {
       return
     }
 
+    resetWidth(input, uploadStore.pendingDimensions)
+    resetMode(input, uploadStore.pendingDimensions)
     sourceImageUrl.value = URL.createObjectURL(input.originalImage)
     void initializeCropper(initializationToken)
   },
@@ -289,7 +477,13 @@ onBeforeUnmount(() => {
   releaseSourceImageUrl()
 })
 
-defineExpose({ cropState, confirmedPreviewInput, sourceImageUrl, confirmationMessage })
+defineExpose({
+  cropState,
+  confirmedPreviewInput,
+  selectedMode,
+  sourceImageUrl,
+  confirmationMessage,
+})
 </script>
 
 <style scoped>
@@ -371,6 +565,22 @@ h1 {
 .crop-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.mode-setting {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-background);
+}
+
+.mode-setting label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .crop-confirmation-status {

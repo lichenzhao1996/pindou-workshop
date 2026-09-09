@@ -4,7 +4,6 @@ const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
 )
-
 const routeCases = [
   { path: '/', heading: '把你的图片，变成可以直接制作的拼豆图纸' },
   { path: '/crop', heading: '确认图片范围' },
@@ -157,6 +156,50 @@ test('continues to the crop route while showing a low-resolution warning', async
   await expect(page.getByRole('status', { name: '图片提示' })).toContainText(
     '图片分辨率较低，生成后细节可能不足，但仍可继续。',
   )
+})
+
+test('shows the default 64x48 generation size for a 4:3 crop', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 4
+    canvas.height = 3
+    const context = canvas.getContext('2d')
+    if (!context) {
+      throw new Error('expected a 2D canvas context')
+    }
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => (value ? resolve(value) : reject(new Error('PNG encoding failed'))))
+    })
+    const input = document.querySelector<HTMLInputElement>('[data-testid="image-file-input"]')
+    if (!input) {
+      throw new Error('expected image file input')
+    }
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(new File([blob], 'landscape.png', { type: 'image/png' }))
+    input.files = dataTransfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByTestId('grid-bead-dimensions')).toContainText('64 × 48 颗')
+  await expect(page.getByTestId('physical-dimensions')).toContainText('16.64cm × 12.48cm')
+})
+
+test('shows optimized as the default generation mode', async ({ page }) => {
+  await page.goto('/')
+  await page.setInputFiles('[data-testid="image-file-input"]', {
+    name: 'mode.png',
+    mimeType: 'image/png',
+    buffer: ONE_PIXEL_PNG,
+  })
+
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByTestId('generation-mode-optimized')).toBeChecked()
+  await expect(page.getByTestId('generation-mode-high-fidelity')).not.toBeChecked()
 })
 
 test('confirms the crop and restores the confirmed range when returning to crop', async ({

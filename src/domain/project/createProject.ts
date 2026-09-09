@@ -7,10 +7,14 @@ import {
   DEFAULT_PROJECT_NAME,
   INITIAL_PROJECT_REVISION,
   INITIAL_PROJECT_VERSION,
-  MAX_GRID_WIDTH,
-  MIN_GRID_WIDTH,
 } from './constants'
-import type { CreateProjectInput, DerivedGridHeight, Project, Source } from './types'
+import {
+  assertValidGenerationMode,
+  assertValidGridWidth,
+  DEFAULT_GENERATION_MODE,
+  deriveGenerationDimensions,
+} from '../generation'
+import type { CreateProjectInput, Project, Source } from './types'
 
 function createProjectId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -28,25 +32,12 @@ function projectNameFromSource(source: Source): string {
   return source.originalFileName.replace(/\.[^/.]+$/, '') || DEFAULT_PROJECT_NAME
 }
 
-function deriveGridHeight(widthBeads: number, aspectRatio: number): DerivedGridHeight {
-  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
-    throw new RangeError('crop aspectRatio must be greater than zero')
-  }
-
-  return Math.round(widthBeads / aspectRatio) as DerivedGridHeight
-}
-
-function assertGridWidth(widthBeads: number): void {
-  if (!Number.isInteger(widthBeads) || widthBeads < MIN_GRID_WIDTH || widthBeads > MAX_GRID_WIDTH) {
-    throw new RangeError(
-      `widthBeads must be an integer from ${MIN_GRID_WIDTH} to ${MAX_GRID_WIDTH}`,
-    )
-  }
-}
-
 export function createProject(input: CreateProjectInput): Project {
   const widthBeads = input.widthBeads ?? DEFAULT_GRID_WIDTH
-  assertGridWidth(widthBeads)
+  assertValidGridWidth(widthBeads)
+  const dimensions = deriveGenerationDimensions(widthBeads, input.crop)
+  const mode = input.mode ?? DEFAULT_GENERATION_MODE
+  assertValidGenerationMode(mode)
 
   const timestamp = (input.now ?? new Date()).toISOString()
 
@@ -61,9 +52,9 @@ export function createProject(input: CreateProjectInput): Project {
     crop: input.crop,
     generation: {
       widthBeads,
-      heightBeads: deriveGridHeight(widthBeads, input.crop.aspectRatio),
+      heightBeads: dimensions.heightBeads,
       beadSizeMm: BEAD_SIZE_MM,
-      mode: input.mode ?? 'optimized',
+      mode,
       paletteVersion: input.paletteVersion ?? DEFAULT_PALETTE_VERSION,
       algorithmVersion: input.algorithmVersion ?? DEFAULT_ALGORITHM_VERSION,
     },

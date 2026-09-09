@@ -1,3 +1,5 @@
+import { EXTREME_ASPECT_RATIO_WARNING_THRESHOLD } from '../../domain/generation/config'
+
 const SUPPORTED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
 
 export type SupportedImageMimeType = (typeof SUPPORTED_MIME_TYPES)[number]
@@ -51,8 +53,6 @@ const MIME_TYPE_BY_EXTENSION: Record<string, SupportedImageMimeType> = {
 const LOW_RESOLUTION_THRESHOLD = 128
 const LARGE_IMAGE_PIXEL_THRESHOLD = 24_000_000
 const LARGE_IMAGE_DIMENSION_THRESHOLD = 8192
-const EXTREME_ASPECT_RATIO_THRESHOLD = 4
-
 function mimeTypeFromFileName(fileName: string): SupportedImageMimeType | null {
   const extension = fileName.slice(fileName.lastIndexOf('.')).toLowerCase()
   return MIME_TYPE_BY_EXTENSION[extension] ?? null
@@ -143,7 +143,7 @@ export function inspectImageDimensions(
   }
 
   const aspectRatio = Math.max(width / height, height / width)
-  if (aspectRatio > EXTREME_ASPECT_RATIO_THRESHOLD) {
+  if (aspectRatio > EXTREME_ASPECT_RATIO_WARNING_THRESHOLD) {
     warnings.push({
       code: 'extreme-aspect-ratio',
       message: '图片宽高比较极端，生成的作品可能较狭长，但仍可继续。',
