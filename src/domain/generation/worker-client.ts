@@ -1,16 +1,21 @@
 import type { GenerationRequest } from './request'
+import type { GenerationResult } from './pipeline'
 import type { RgbaImage } from './rasterize'
+
+export type GenerationWorkerOperation = 'generate-grid'
 
 export interface GenerationWorkerRequestMessage {
   readonly type: 'generate'
   readonly requestId: number
   readonly request: GenerationRequest
   readonly rgbaImage?: RgbaImage
+  readonly operation?: GenerationWorkerOperation
 }
 
 export interface GenerationWorkerAcceptedResult {
   readonly accepted: true
   readonly resampledImage?: RgbaImage
+  readonly generationResult?: GenerationResult
 }
 
 export interface GenerationWorkerSuccessMessage {
@@ -54,23 +59,19 @@ export function createGenerationWorkerRequest(
   requestId: number,
   request: GenerationRequest,
   rgbaImage?: RgbaImage,
+  operation?: GenerationWorkerOperation,
 ): GenerationWorkerRequestMessage {
   if (!isPositiveRequestId(requestId)) {
     throw new RangeError('generation worker requestId must be a positive safe integer')
   }
 
-  return rgbaImage === undefined
-    ? {
-        type: 'generate',
-        requestId,
-        request,
-      }
-    : {
-        type: 'generate',
-        requestId,
-        request,
-        rgbaImage,
-      }
+  return {
+    type: 'generate',
+    requestId,
+    request,
+    ...(rgbaImage === undefined ? {} : { rgbaImage }),
+    ...(operation === undefined ? {} : { operation }),
+  }
 }
 
 function isRgbaImage(value: unknown): value is RgbaImage {
@@ -93,6 +94,7 @@ export function isGenerationWorkerRequestMessage(
     value.type === 'generate' &&
     isPositiveRequestId(value.requestId) &&
     isRecord(value.request) &&
+    (value.operation === undefined || value.operation === 'generate-grid') &&
     (value.rgbaImage === undefined || isRgbaImage(value.rgbaImage))
   )
 }
@@ -106,6 +108,37 @@ function parseErrorPayload(value: unknown): GenerationWorkerErrorPayload | null 
     code: value.code,
     message: value.message,
   }
+}
+
+function isGenerationResult(value: unknown): value is GenerationResult {
+  if (!isRecord(value) || !isRecord(value.grid) || !isRecord(value.diagnostics)) {
+    return false
+  }
+
+  const grid = value.grid
+  const diagnostics = value.diagnostics
+  const sourceSize = diagnostics.sourceSize
+  const cropSize = diagnostics.cropSize
+
+  return (
+    Number.isSafeInteger(grid.width) &&
+    (grid.width as number) > 0 &&
+    Number.isSafeInteger(grid.height) &&
+    (grid.height as number) > 0 &&
+    grid.cells instanceof Uint16Array &&
+    grid.cells.length === (grid.width as number) * (grid.height as number) &&
+    Number.isSafeInteger(value.heightBeads) &&
+    (value.heightBeads as number) > 0 &&
+    typeof value.paletteVersion === 'string' &&
+    typeof value.algorithmVersion === 'string' &&
+    isRecord(sourceSize) &&
+    Number.isSafeInteger(sourceSize.width) &&
+    Number.isSafeInteger(sourceSize.height) &&
+    isRecord(cropSize) &&
+    Number.isSafeInteger(cropSize.width) &&
+    Number.isSafeInteger(cropSize.height) &&
+    Number.isFinite(diagnostics.elapsedMs)
+  )
 }
 
 export function parseGenerationWorkerResponse(
@@ -129,6 +162,18 @@ export function parseGenerationWorkerResponse(
         type: 'success',
         requestId: value.requestId,
         result: { accepted: true, resampledImage: value.result.resampledImage },
+      }
+    }
+
+    if (value.result.generationResult !== undefined) {
+      if (!isGenerationResult(value.result.generationResult)) {
+        return null
+      }
+
+      return {
+        type: 'success',
+        requestId: value.requestId,
+        result: { accepted: true, generationResult: value.result.generationResult },
       }
     }
 
@@ -249,6 +294,21 @@ export class GenerationWorkerClient {
     request: GenerationRequest,
     rgbaImage?: RgbaImage,
   ): Promise<GenerationWorkerAcceptedResult> {
+    return this.generateWithOperation(request, rgbaImage)
+  }
+
+  generateGrid(
+    request: GenerationRequest,
+    rgbaImage: RgbaImage,
+  ): Promise<GenerationWorkerAcceptedResult> {
+    return this.generateWithOperation(request, rgbaImage, 'generate-grid')
+  }
+
+  private generateWithOperation(
+    request: GenerationRequest,
+    rgbaImage: RgbaImage | undefined,
+    operation?: GenerationWorkerOperation,
+  ): Promise<GenerationWorkerAcceptedResult> {
     let worker: GenerationWorkerLike
     try {
       worker = this.ensureWorker()
@@ -265,7 +325,7 @@ export class GenerationWorkerClient {
     this.pending = null
 
     const requestId = ++this.nextRequestId
-    const message = createGenerationWorkerRequest(requestId, request, rgbaImage)
+    const message = createGenerationWorkerRequest(requestId, request, rgbaImage, operation)
 
     return new Promise<GenerationWorkerAcceptedResult>((resolve, reject) => {
       this.pending = { requestId, resolve, reject }

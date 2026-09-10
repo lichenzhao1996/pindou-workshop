@@ -4,6 +4,10 @@ import {
   type GenerationWorkerResponseMessage,
   type GenerationWorkerRequestMessage,
 } from '../domain/generation/worker-client'
+import {
+  generateGenerationResultFromRgbaImage,
+  type GenerationResult,
+} from '../domain/generation/pipeline'
 import { resampleGenerationImage } from '../domain/generation/resample'
 import type { GenerationRequest } from '../domain/generation/request'
 import type { RgbaImage } from '../domain/generation/rasterize'
@@ -12,6 +16,8 @@ type GenerationResampler = (
   source: RgbaImage,
   request: Pick<GenerationRequest, 'widthBeads' | 'crop'>,
 ) => RgbaImage
+
+type GenerationPipeline = (request: GenerationRequest, rasterized: RgbaImage) => GenerationResult
 
 function getRequestId(value: unknown): number | null {
   if (typeof value !== 'object' || value === null) {
@@ -25,6 +31,7 @@ function getRequestId(value: unknown): number | null {
 export function handleGenerationWorkerMessage(
   value: unknown,
   resampler: GenerationResampler = resampleGenerationImage,
+  pipeline: GenerationPipeline = generateGenerationResultFromRgbaImage,
 ): GenerationWorkerResponseMessage {
   if (!isGenerationWorkerRequestMessage(value)) {
     const error: GenerationWorkerErrorMessage = {
@@ -39,6 +46,39 @@ export function handleGenerationWorkerMessage(
   }
 
   const request = value as GenerationWorkerRequestMessage
+  if (request.operation === 'generate-grid') {
+    if (request.rgbaImage === undefined) {
+      return {
+        type: 'error',
+        requestId: request.requestId,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: '生成 Grid 请求缺少 RGBA 输入',
+        },
+      }
+    }
+
+    try {
+      return {
+        type: 'success',
+        requestId: request.requestId,
+        result: {
+          accepted: true,
+          generationResult: pipeline(request.request, request.rgbaImage),
+        },
+      }
+    } catch (error) {
+      return {
+        type: 'error',
+        requestId: request.requestId,
+        error: {
+          code: 'GENERATION_FAILED',
+          message: error instanceof Error ? error.message : '拼豆图生成失败',
+        },
+      }
+    }
+  }
+
   if (request.rgbaImage !== undefined) {
     try {
       return {
