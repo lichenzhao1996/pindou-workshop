@@ -120,6 +120,21 @@
           {{ GENERATION_MODE_LABELS[mode] }}
         </label>
         <p class="field-help">默认使用拼豆优化模式；切换后将按所选模式请求生成。</p>
+        <div
+          v-if="pendingMode"
+          class="mode-confirmation"
+          data-testid="generation-mode-confirmation"
+          role="dialog"
+          aria-label="确认切换生成模式"
+        >
+          <p>切换模式会重新生成作品，当前手动修改会被清除。</p>
+          <button type="button" data-testid="generation-mode-cancel" @click="cancelModeChange">
+            取消
+          </button>
+          <button type="button" data-testid="generation-mode-confirm" @click="confirmModeChange">
+            重新生成
+          </button>
+        </div>
       </fieldset>
 
       <dl v-if="generationDimensions" class="dimension-summary" data-testid="generation-dimensions">
@@ -213,6 +228,7 @@ const sourceImageUrl = shallowRef<string | null>(null)
 const widthInput = ref(String(DEFAULT_GRID_WIDTH))
 const validWidthBeads = ref(DEFAULT_GRID_WIDTH)
 const selectedMode = shallowRef<GenerationMode>(DEFAULT_GENERATION_MODE)
+const pendingMode = shallowRef<GenerationMode | null>(null)
 const widthError = shallowRef<string | null>(null)
 let initializationToken = 0
 
@@ -301,10 +317,49 @@ function resetWidth(input: ImageInput | null, dimensions: ImageDimensions | null
 function resetMode(input: ImageInput | null, dimensions: ImageDimensions | null) {
   const matchingProject = input && dimensions ? findMatchingProject(input, dimensions) : null
   selectedMode.value = matchingProject?.generation.mode ?? DEFAULT_GENERATION_MODE
+  pendingMode.value = null
 }
 
 function selectMode(mode: GenerationMode) {
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  const matchingProject = input && dimensions ? findMatchingProject(input, dimensions) : null
+  if (
+    matchingProject &&
+    matchingProject.generation.mode !== mode &&
+    matchingProject.grid !== null &&
+    matchingProject.revision > 0
+  ) {
+    pendingMode.value = mode
+    return
+  }
+
   selectedMode.value = mode
+}
+
+function cancelModeChange() {
+  pendingMode.value = null
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  const matchingProject = input && dimensions ? findMatchingProject(input, dimensions) : null
+  selectedMode.value = matchingProject?.generation.mode ?? DEFAULT_GENERATION_MODE
+}
+
+function confirmModeChange() {
+  if (!pendingMode.value) {
+    return
+  }
+
+  const nextMode = pendingMode.value
+  const currentProject = projectStore.currentProject
+  if (currentProject) {
+    const nextProject = updateProjectGenerationMode(currentProject, nextMode)
+    projectStore.setCurrentProject(nextProject)
+    projectStore.prepareGenerationRequest()
+  }
+
+  selectedMode.value = nextMode
+  pendingMode.value = null
 }
 
 function applyWidth(widthBeads: number) {

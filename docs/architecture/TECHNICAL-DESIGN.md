@@ -189,6 +189,14 @@ Project
 └─ revision: number
 ```
 
+版本字段语义固定如下：
+
+- `schemaVersion` 是 Project 持久化 schema 版本，只在数据结构迁移时变化；生成、重新生成、裁剪、宽度、模式和 Grid 编辑都不得修改它。
+- `projectVersion` 是 Project 数据契约版本，V1 固定为 `1`；正常作品操作和生成结果提交都不递增它。
+- `revision` 是当前生成 Grid 基线上的手工 Grid 编辑 revision。生成结果提交建立新的 Grid 基线并将其重置为 `0`；之后每次有效手工 Grid 编辑递增，无变化编辑不递增。`grid === null` 时，旧 revision 不代表当前存在手工编辑。
+
+生成结果提交必须以 immutable update 替换同一个 Project 的 `grid`，保持 `projectId`、`createdAt`、`source`、`crop`、`schemaVersion` 和 `projectVersion` 不变，更新 `updatedAt`，并将 `revision` 设为 `0`。有手工编辑的当前 Grid 仅由 `project.grid !== null && project.revision > 0` 判断。
+
 `heightBeads` 允许作为快照字段保存，但它不是用户独立输入。唯一计算来源必须是：
 
 > `heightBeads = max(1, round(widthBeads / visualAspectRatio))`
@@ -499,6 +507,8 @@ V1 不做图像分类，采用统一的、可测试的基础规则。推荐分�
 - 7 颗以上：默认保留
 
 候选只有在相近、孤立且不承担关键结构时才允许合并。目标颜色从相邻主色中选择，不允许跳到任意 RGB。具体距离阈值和保护阈值作为带版本号的内部算法参数，并通过样例测试和人工验收调节，不做用户设置项。
+
+TASK-039 在 V1 optimized algorithm v1 中固定采用以下 contract：只处理非 EMPTY、size 1～3 且不接触 Grid 外边界的 region，size ≥ 4 一律保留；target 只来自直接四邻域的合法非 EMPTY MARD palette index；使用现有 Palette Lab 与 ΔE76，准入条件为 `ΔE76 <= 8`；候选依次按 `contactCount` 降序、ΔE76 升序、`paletteIndex` 升序选择。算法使用 single snapshot pass，所有检测和决策均读取同一输入 Grid 的 TASK-038 analysis，不迭代且不产生 chain reaction；输入 Grid 不可变，输出 dimensions 与 `0～291` 编码不变。EMPTY 不作为 candidate 或 target，也不执行颜色与 EMPTY 的双向转换。该 pass 不修改 Project 或 revision，并且 high-fidelity 不经过该 pass。完整 contract 见 [`TASK-039-ALGORITHM-CONTRACT.md`](./TASK-039-ALGORITHM-CONTRACT.md)。这些参数继续由现有 `algorithmVersion` 追溯，不新增 Project 版本字段，也不修改 `paletteVersion`。
 
 #### B. 基础轮廓强化
 

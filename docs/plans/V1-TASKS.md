@@ -2065,7 +2065,7 @@ PRD §13.2：切换模式会清除手动修改；提供取消 / 重新生成；�
 
 - Worker 不直接写 Store。
 - 失败保留上一个合法 Project。
-- 生成结果提交时替换 Grid、更新 revision / 版本并清空旧历史。
+- 生成结果提交时 immutable 替换同一个 Project 的 Grid，保持 `schemaVersion` 和 `projectVersion` 不变，更新 `updatedAt`，并将当前生成基线的 `revision` 重置为 `0`，同时清空旧历史。
 
 **验收标准**
 
@@ -2156,18 +2156,22 @@ TASK-038、TASK-017。
 
 **本次范围**
 
-- 处理 1 / 2 / 3 颗候选。
-- 对 4～6 颗和 7+ 颗按 PRD 倾向保留。
-- 根据相近度、邻域和视觉关键性选择相邻合法色。
+- 只处理非 EMPTY、size 1 / 2 / 3 且不接触 Grid 外边界的 region；size ≥ 4 一律保留。
+- target 只从直接四邻域的合法非 EMPTY MARD palette index 中选择。
+- 使用 Palette Lab 和现有 ΔE76，以 `ΔE76 <= 8` 为 inclusive 准入条件。
+- 候选依次按 `contactCount` 降序、ΔE76 升序、`paletteIndex` 升序选择。
+- 使用 single snapshot pass，不迭代且不产生 chain reaction。
 
 **不在本次范围**
 
 - 不设置用户可调阈值。
 - 不激进删除重要轮廓或所有少量颜色。
+- 不处理 Grid 外边界 region，不实现 TASK-040 的其它视觉轮廓保护。
+- 不执行颜色与 EMPTY 的双向转换。
 
 **涉及模块**
 
-`src/domain/generation/optimize/merge-fragments.ts`。
+`src/domain/generation/fragment-merge.ts`、`docs/architecture/TASK-039-ALGORITHM-CONTRACT.md`。
 
 **产品规则**
 
@@ -2177,14 +2181,17 @@ PRD §9.1：偏保守，宁愿保留少量杂色，不删除可能影响识别�
 
 - 输出仍只含 EMPTY 或 MARD palette index。
 - 优化函数不可变，不修改输入 Grid。
-- 阈值与算法版本集中管理。
+- region detection 复用 TASK-038，颜色距离复用现有 Palette Lab / ΔE76，不建立第二套分析或距离算法。
+- size 上限与 ΔE76 阈值集中管理，并由现有 optimized `algorithmVersion` 追溯；不新增 Project 版本字段，不修改 `paletteVersion`。
+- 不修改 Project、revision、schemaVersion 或 projectVersion，且 high-fidelity 不执行本 pass。
 
 **验收标准**
 
-1. 相近孤立 1～2 颗可按规则合并。
-2. 明显对比、结构边缘和规律图案保留概率高。
-3. 4～6 颗通常保留，7+ 默认保留。
-4. 无任意 RGB / HEX 输出。
+1. 相近的非边界 size 1～3 region 可按固定排序合并，size ≥ 4 和 Grid edge region 保留。
+2. `ΔE76 = 8` 允许，`ΔE76 > 8` 拒绝；target 只来自直接四邻域。
+3. EMPTY 不作为 candidate 或 target，不产生颜色 → EMPTY 或 EMPTY → 颜色。
+4. 单次结果不受 region 遍历顺序影响，不产生迭代或 chain reaction。
+5. 输入 Grid 不变，输出 dimensions 不变，所有 cells 仍为 `0～291`，无任意 RGB / HEX 输出。
 
 **自动化测试要求**
 
