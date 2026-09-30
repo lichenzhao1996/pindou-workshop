@@ -8,6 +8,8 @@ import {
   generateGenerationResultFromRgbaImage,
   type GenerationResult,
 } from '../domain/generation/pipeline'
+import { generateHighFidelityGenerationResultFromRgbaImage } from '../domain/generation/high-fidelity'
+import { assertValidGenerationMode } from '../domain/generation/mode'
 import { resampleGenerationImage } from '../domain/generation/resample'
 import type { GenerationRequest } from '../domain/generation/request'
 import type { RgbaImage } from '../domain/generation/rasterize'
@@ -18,6 +20,17 @@ type GenerationResampler = (
 ) => RgbaImage
 
 type GenerationPipeline = (request: GenerationRequest, rasterized: RgbaImage) => GenerationResult
+
+function generateGridForMode(request: GenerationRequest, rasterized: RgbaImage): GenerationResult {
+  assertValidGenerationMode(request.mode)
+  if (request.mode === 'high-fidelity') {
+    return generateHighFidelityGenerationResultFromRgbaImage(request, rasterized)
+  }
+
+  // TASK-037 only connects the optimized mode to the existing provisional base Grid.
+  // Complete optimized orchestration belongs to TASK-042.
+  return generateGenerationResultFromRgbaImage(request, rasterized)
+}
 
 function getRequestId(value: unknown): number | null {
   if (typeof value !== 'object' || value === null) {
@@ -31,7 +44,7 @@ function getRequestId(value: unknown): number | null {
 export function handleGenerationWorkerMessage(
   value: unknown,
   resampler: GenerationResampler = resampleGenerationImage,
-  pipeline: GenerationPipeline = generateGenerationResultFromRgbaImage,
+  pipeline: GenerationPipeline = generateGridForMode,
 ): GenerationWorkerResponseMessage {
   if (!isGenerationWorkerRequestMessage(value)) {
     const error: GenerationWorkerErrorMessage = {

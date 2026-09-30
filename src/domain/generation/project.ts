@@ -1,7 +1,7 @@
 import { deriveGenerationDimensions } from './dimensions'
 import type { Project } from '../project/types'
 
-/** Updates only generation dimensions; Grid editing revision is unaffected. */
+/** Changes formal dimensions and invalidates the old Grid without resetting revision. */
 export function updateProjectGenerationSize(
   project: Project,
   widthBeads: number,
@@ -23,5 +23,6 @@ export function updateProjectGenerationSize(
       widthBeads: dimensions.widthBeads,
       heightBeads: dimensions.heightBeads,
     },
+    grid: null,
   }
 }

@@ -15,16 +15,26 @@
       />
 
       <div class="crop-controls" aria-label="裁剪调整工具">
-        <button type="button" data-testid="crop-zoom-out" :disabled="!cropper" @click="zoomOut">
+        <button
+          type="button"
+          data-testid="crop-zoom-out"
+          :disabled="!cropper || isGenerating"
+          @click="zoomOut"
+        >
           缩小
         </button>
-        <button type="button" data-testid="crop-zoom-in" :disabled="!cropper" @click="zoomIn">
+        <button
+          type="button"
+          data-testid="crop-zoom-in"
+          :disabled="!cropper || isGenerating"
+          @click="zoomIn"
+        >
           放大
         </button>
         <button
           type="button"
           data-testid="crop-rotate-left"
-          :disabled="!cropper"
+          :disabled="!cropper || isGenerating"
           @click="rotateLeft"
         >
           向左旋转 90°
@@ -32,7 +42,7 @@
         <button
           type="button"
           data-testid="crop-rotate-right"
-          :disabled="!cropper"
+          :disabled="!cropper || isGenerating"
           @click="rotateRight"
         >
           向右旋转 90°
@@ -43,12 +53,17 @@
         <button
           type="button"
           data-testid="crop-confirm"
-          :disabled="!cropState || widthError !== null"
+          :disabled="!cropState || widthError !== null || pendingMode !== null || isGenerating"
           @click="confirmCurrentCrop"
         >
           确认裁剪
         </button>
-        <button type="button" data-testid="crop-cancel" :disabled="!cropState" @click="cancelCrop">
+        <button
+          type="button"
+          data-testid="crop-cancel"
+          :disabled="!cropState || isGenerating"
+          @click="cancelCrop"
+        >
           取消
         </button>
       </div>
@@ -73,7 +88,6 @@
         <p class="eyebrow">生成设置</p>
         <h2 id="generation-settings-title">设置作品尺寸</h2>
       </header>
-
       <div class="width-setting">
         <label for="grid-width-input">作品宽度（颗）</label>
         <input
@@ -82,6 +96,7 @@
           :value="widthInput"
           inputmode="numeric"
           type="text"
+          :disabled="isGenerating"
           aria-describedby="grid-width-help"
           @input="handleWidthInput"
         />
@@ -100,13 +115,18 @@
           type="button"
           :data-testid="`grid-width-preset-${preset}`"
           :aria-pressed="validWidthBeads === preset"
+          :disabled="isGenerating"
           @click="applyWidth(preset)"
         >
           {{ preset }}
         </button>
       </div>
 
-      <fieldset class="mode-setting" data-testid="generation-mode-selector">
+      <fieldset
+        class="mode-setting"
+        data-testid="generation-mode-selector"
+        :disabled="isGenerating"
+      >
         <legend>生成模式</legend>
         <label v-for="mode in GENERATION_MODES" :key="mode">
           <input
@@ -164,6 +184,28 @@
           {{ warning.message }}
         </p>
       </div>
+      <div class="crop-actions" aria-label="生成操作">
+        <button
+          type="button"
+          data-testid="generate"
+          :disabled="!canGenerate || isGenerating"
+          @click="generate"
+        >
+          {{ isGenerating ? '生成中…' : '生成拼豆图' }}
+        </button>
+        <button
+          v-if="isGenerating"
+          type="button"
+          data-testid="generation-cancel"
+          @click="projectStore.cancelGeneration()"
+        >
+          取消生成
+        </button>
+      </div>
+      <p v-if="isGenerating" data-testid="generation-pending" role="status">正在生成拼豆图…</p>
+      <p v-if="projectStore.generationError" data-testid="generation-error" role="alert">
+        {{ projectStore.generationError }}
+      </p>
     </section>
 
     <div
@@ -182,7 +224,7 @@
 <script setup lang="ts">
 import 'cropperjs/dist/cropper.css'
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
 import { useUploadStore } from '../../app/stores/uploadStore'
 import {
@@ -194,6 +236,7 @@ import {
   confirmProjectCrop,
   createFullImageCropState,
   createProject,
+  isSameCropState,
   type CropState,
   type CropPreviewInput,
   type Source,
@@ -219,6 +262,7 @@ import {
 
 const uploadStore = useUploadStore()
 const projectStore = useProjectStore()
+const router = useRouter()
 const imageElement = ref<HTMLImageElement | null>(null)
 const cropper = shallowRef<ReturnType<typeof createCropperAdapter> | null>(null)
 const cropState = shallowRef<CropState | null>(null)
@@ -231,6 +275,47 @@ const selectedMode = shallowRef<GenerationMode>(DEFAULT_GENERATION_MODE)
 const pendingMode = shallowRef<GenerationMode | null>(null)
 const widthError = shallowRef<string | null>(null)
 let initializationToken = 0
+let disposed = false
+const isGenerating = computed(() => projectStore.generationStatus === 'generating')
+const canGenerate = computed(() => {
+  const project = projectStore.currentProject
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  return !!(
+    project &&
+    input &&
+    dimensions &&
+    cropState.value &&
+    sourceMatchesInput(project.source, input, dimensions) &&
+    isSameCropState(project.crop, cropState.value) &&
+    widthError.value === null &&
+    !pendingMode.value
+  )
+})
+
+async function generate() {
+  await generateProject(true)
+}
+
+async function generateProject(requireConfirmedCrop: boolean) {
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  const project = input && dimensions ? findMatchingProject(input, dimensions) : null
+  if (!project || isGenerating.value || (requireConfirmedCrop && !canGenerate.value)) {
+    return
+  }
+  const projectId = project.projectId
+  const committed = await projectStore.generateCurrentProject()
+  if (
+    !disposed &&
+    committed &&
+    projectStore.generationStatus === 'success' &&
+    projectStore.currentProject?.projectId === projectId &&
+    projectStore.currentProject.grid
+  ) {
+    await router.push({ name: 'editor' })
+  }
+}
 
 const generationDimensions = computed(() => {
   if (!cropState.value || !isValidGridWidth(validWidthBeads.value)) {
@@ -324,6 +409,9 @@ function selectMode(mode: GenerationMode) {
   const input = uploadStore.pendingInput
   const dimensions = uploadStore.pendingDimensions
   const matchingProject = input && dimensions ? findMatchingProject(input, dimensions) : null
+  if (matchingProject?.generation.mode === mode) {
+    return
+  }
   if (
     matchingProject &&
     matchingProject.generation.mode !== mode &&
@@ -334,7 +422,22 @@ function selectMode(mode: GenerationMode) {
     return
   }
 
+  applyMode(mode)
+}
+
+function applyMode(mode: GenerationMode, regenerate = false) {
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  const currentProject = input && dimensions ? findMatchingProject(input, dimensions) : null
+  const hadGrid = currentProject !== null && currentProject.grid !== null
   selectedMode.value = mode
+  if (currentProject) {
+    projectStore.setCurrentProject(updateProjectGenerationMode(currentProject, mode))
+    if (hadGrid || regenerate) {
+      // A mode confirmation regenerates the formal crop, never an unconfirmed Cropper draft.
+      void generateProject(false)
+    }
+  }
 }
 
 function cancelModeChange() {
@@ -351,15 +454,8 @@ function confirmModeChange() {
   }
 
   const nextMode = pendingMode.value
-  const currentProject = projectStore.currentProject
-  if (currentProject) {
-    const nextProject = updateProjectGenerationMode(currentProject, nextMode)
-    projectStore.setCurrentProject(nextProject)
-    projectStore.prepareGenerationRequest()
-  }
-
-  selectedMode.value = nextMode
   pendingMode.value = null
+  applyMode(nextMode, true)
 }
 
 function applyWidth(widthBeads: number) {
@@ -526,7 +622,28 @@ watch(
   { immediate: true },
 )
 
+watch(isGenerating, (pending) => {
+  if (pending) {
+    cropper.value?.disable?.()
+  } else {
+    cropper.value?.enable?.()
+  }
+})
+
+watch(
+  () => projectStore.currentProject,
+  (project) => {
+    if (project) {
+      selectedMode.value = project.generation.mode
+    }
+  },
+)
+
 onBeforeUnmount(() => {
+  disposed = true
+  if (isGenerating.value) {
+    projectStore.cancelGeneration()
+  }
   initializationToken += 1
   destroyCropper()
   releaseSourceImageUrl()

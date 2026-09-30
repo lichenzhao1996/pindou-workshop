@@ -262,7 +262,20 @@ export class GenerationWorkerClient {
   private readonly handleMessage = (event: unknown): void => {
     const messageEvent = event as { data?: unknown }
     const response = parseGenerationWorkerResponse(messageEvent.data)
-    if (!response || !this.pending || response.requestId !== this.pending.requestId) {
+    if (!this.pending) {
+      return
+    }
+
+    if (!response) {
+      if (isRecord(messageEvent.data) && messageEvent.data.requestId === this.pending.requestId) {
+        const pending = this.pending
+        this.pending = null
+        pending.reject(new GenerationWorkerError('INVALID_RESPONSE', '生成 Worker 响应格式无效'))
+      }
+      return
+    }
+
+    if (response.requestId !== this.pending.requestId) {
       return
     }
 

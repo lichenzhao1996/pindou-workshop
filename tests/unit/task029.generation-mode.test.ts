@@ -42,9 +42,12 @@ describe('TASK-029 generation mode', () => {
     const request = createGenerationRequest(projectWithGrid)
 
     expect(request).toEqual({
+      projectId: project.projectId,
+      source: project.source,
       originalImage: source.originalImage,
       crop: project.crop,
       widthBeads: 64,
+      heightBeads: 48,
       mode: 'optimized',
       paletteVersion: project.generation.paletteVersion,
       algorithmVersion: project.generation.algorithmVersion,
