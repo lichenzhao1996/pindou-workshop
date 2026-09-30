@@ -4,11 +4,9 @@ import {
   type GenerationWorkerResponseMessage,
   type GenerationWorkerRequestMessage,
 } from '../domain/generation/worker-client'
-import {
-  generateGenerationResultFromRgbaImage,
-  type GenerationResult,
-} from '../domain/generation/pipeline'
+import type { GenerationResult } from '../domain/generation/pipeline'
 import { generateHighFidelityGenerationResultFromRgbaImage } from '../domain/generation/high-fidelity'
+import { generateOptimizedGenerationResultFromRgbaImage } from '../domain/generation/optimized'
 import { assertValidGenerationMode } from '../domain/generation/mode'
 import { resampleGenerationImage } from '../domain/generation/resample'
 import type { GenerationRequest } from '../domain/generation/request'
@@ -27,9 +25,7 @@ function generateGridForMode(request: GenerationRequest, rasterized: RgbaImage):
     return generateHighFidelityGenerationResultFromRgbaImage(request, rasterized)
   }
 
-  // TASK-037 only connects the optimized mode to the existing provisional base Grid.
-  // Complete optimized orchestration belongs to TASK-042.
-  return generateGenerationResultFromRgbaImage(request, rasterized)
+  return generateOptimizedGenerationResultFromRgbaImage(request, rasterized)
 }
 
 function getRequestId(value: unknown): number | null {

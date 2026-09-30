@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
+import { MARD_291_PALETTE_VERSION } from '../../src/domain/palette/version'
+import { DEFAULT_ALGORITHM_VERSION } from '../../src/domain/project/constants'
 import type { Project } from '../../src/domain/project/types'
 
 const ONE_PIXEL_PNG = Buffer.from(
@@ -254,7 +256,12 @@ async function uploadGenerationFixture(page: Page) {
   await expect(page.getByTestId('generate')).toBeEnabled()
 }
 
-async function assertCommittedGrid(page: Page, width: number, height: number) {
+async function assertCommittedGrid(
+  page: Page,
+  width: number,
+  height: number,
+  generationStartedAt: number,
+) {
   await expect(page).toHaveURL(/\/editor$/)
   const result = page.getByTestId('editor-grid')
   await expect(result).toHaveAttribute('data-width', String(width))
@@ -283,6 +290,13 @@ async function assertCommittedGrid(page: Page, width: number, height: number) {
       first: grid.cells[0],
       last: grid.cells[grid.width - 1],
       projectId: project.projectId,
+      mode: project.generation.mode,
+      algorithmVersion: project.generation.algorithmVersion,
+      paletteVersion: project.generation.paletteVersion,
+      revision: project.revision,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      observedAt: Date.now(),
     }
   })
   expect(actual.width).toBe(width)
@@ -292,7 +306,14 @@ async function assertCommittedGrid(page: Page, width: number, height: number) {
   expect(actual.legal).toBe(true)
   expect(actual.first).toBe(1)
   expect(actual.last).toBe(35)
+  expect(actual.algorithmVersion).toBe(DEFAULT_ALGORITHM_VERSION)
+  expect(actual.paletteVersion).toBe(MARD_291_PALETTE_VERSION)
+  expect(actual.revision).toBe(0)
+  expect(Date.parse(actual.updatedAt)).toBeGreaterThanOrEqual(generationStartedAt)
+  expect(Date.parse(actual.updatedAt)).toBeGreaterThanOrEqual(Date.parse(actual.createdAt))
+  expect(Date.parse(actual.updatedAt)).toBeLessThanOrEqual(actual.observedAt)
   await expect(result).toHaveAttribute('data-project-id', actual.projectId)
+  return actual
 }
 
 for (const mode of ['optimized', 'high-fidelity'] as const) {
@@ -306,8 +327,10 @@ for (const mode of ['optimized', 'high-fidelity'] as const) {
     await uploadGenerationFixture(page)
     await page.getByTestId('grid-width-preset-32').click()
     await page.getByTestId(`generation-mode-${mode}`).check()
+    const generationStartedAt = await page.evaluate(() => Date.now())
     await page.getByTestId('generate').click()
-    await assertCommittedGrid(page, 32, 24)
+    const committed = await assertCommittedGrid(page, 32, 24, generationStartedAt)
+    expect(committed.mode).toBe(mode)
     await expect(page.getByTestId('editor-mode')).toHaveText(
       mode === 'optimized' ? '拼豆优化' : '高清还原',
     )
@@ -321,8 +344,9 @@ test('TASK-037 mode confirmation preserves edits on cancel and regenerates from 
 }) => {
   await uploadGenerationFixture(page)
   await page.getByTestId('grid-width-preset-32').click()
+  const initialGenerationStartedAt = await page.evaluate(() => Date.now())
   await page.getByTestId('generate').click()
-  await assertCommittedGrid(page, 32, 24)
+  const initial = await assertCommittedGrid(page, 32, 24, initialGenerationStartedAt)
   const projectId = await page.getByTestId('editor-grid').getAttribute('data-project-id')
 
   // Editing tools are TASK-043+. Seed one immutable manual edit through the real
@@ -365,8 +389,12 @@ test('TASK-037 mode confirmation preserves edits on cancel and regenerates from 
   await expect(page.getByTestId('editor-mode')).toHaveText('拼豆优化')
   await page.getByRole('link', { name: '返回裁剪与生成设置' }).click()
   await page.getByTestId('generation-mode-high-fidelity').check()
+  const regenerationStartedAt = await page.evaluate(() => Date.now())
   await page.getByTestId('generation-mode-confirm').click()
-  await assertCommittedGrid(page, 32, 24)
+  const regenerated = await assertCommittedGrid(page, 32, 24, regenerationStartedAt)
+  expect(regenerated.projectId).toBe(initial.projectId)
+  expect(regenerated.createdAt).toBe(initial.createdAt)
+  expect(regenerated.mode).toBe('high-fidelity')
   await expect(page.getByTestId('editor-mode')).toHaveText('高清还原')
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-project-id', projectId!)
 })

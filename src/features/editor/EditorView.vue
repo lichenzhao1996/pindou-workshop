@@ -20,7 +20,7 @@
           {{ stats.totalBeads }} 颗拼豆，{{ stats.usedColorCount }} 种颜色
         </p>
         <p v-if="project.generation.mode === 'optimized'">
-          当前为基础生成结果；完整拼豆优化将在后续阶段接入。
+          已完成轮廓保护、保守碎色合并与基础背景简化。
         </p>
       </section>
       <RouterLink to="/crop">返回裁剪与生成设置</RouterLink>

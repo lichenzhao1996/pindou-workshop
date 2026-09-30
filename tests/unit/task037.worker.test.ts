@@ -10,6 +10,7 @@ import {
   type RgbaImage,
 } from '../../src/domain/generation'
 import * as highFidelity from '../../src/domain/generation/high-fidelity'
+import * as optimized from '../../src/domain/generation/optimized'
 import * as pipeline from '../../src/domain/generation/pipeline'
 import { createProject, type GenerationMode } from '../../src/domain/project'
 import { handleGenerationWorkerMessage } from '../../src/workers/generation.worker'
@@ -95,11 +96,11 @@ describe('TASK-037 Worker mode dispatch', () => {
     })
   })
 
-  it('keeps optimized on the provisional TASK-035 base pipeline', () => {
+  it('dispatches optimized to the formal TASK-042 pipeline', () => {
     const request = createRequest()
     const result = createResult(request)
-    const basePipeline = vi
-      .spyOn(pipeline, 'generateGenerationResultFromRgbaImage')
+    const optimizedPipeline = vi
+      .spyOn(optimized, 'generateOptimizedGenerationResultFromRgbaImage')
       .mockReturnValue(result)
     const highFidelityPipeline = vi.spyOn(
       highFidelity,
@@ -111,7 +112,7 @@ describe('TASK-037 Worker mode dispatch', () => {
       createGenerationWorkerRequest(1, request, pixels, 'generate-grid'),
     )
 
-    expect(basePipeline).toHaveBeenCalledWith(request, pixels)
+    expect(optimizedPipeline).toHaveBeenCalledWith(request, pixels)
     expect(highFidelityPipeline).not.toHaveBeenCalled()
     expect(response.type).toBe('success')
   })
