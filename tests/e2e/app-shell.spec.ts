@@ -398,3 +398,107 @@ test('TASK-037 mode confirmation preserves edits on cancel and regenerates from 
   await expect(page.getByTestId('editor-mode')).toHaveText('高清还原')
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-project-id', projectId!)
 })
+
+test('TASK-043–047 renders a real Worker Grid and supports viewport, grid and pan interactions', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  const workers: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text())
+  })
+  page.on('worker', (worker) => workers.push(worker.url()))
+
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const committed = await assertCommittedGrid(page, 32, 24, generationStartedAt)
+  expect(committed.mode).toBe('optimized')
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const shell = page.getByTestId('editor-shell')
+  const tools = page.getByTestId('editor-tools')
+  const canvasArea = page.getByTestId('editor-canvas-area')
+  await expect(shell).toBeVisible()
+  await expect(tools).toBeVisible()
+  await expect(page.getByTestId('editor-toolbar')).toBeVisible()
+  await expect(page.getByTestId('editor-sidebar')).toBeVisible()
+  await expect(page.getByTestId('editor-canvas')).toBeVisible()
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-rendered-beads')))
+    .toBeGreaterThan(0)
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-major-lines')))
+    .toBeGreaterThan(0)
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-coordinates')))
+    .toBeGreaterThan(0)
+
+  const originalCells = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    return Array.from(project.grid!.cells)
+  })
+  const initialZoom = Number(await canvasArea.getAttribute('data-zoom'))
+  expect(initialZoom).toBeGreaterThanOrEqual(0.1)
+  expect(initialZoom).toBeLessThan(1)
+
+  await page.getByTestId('viewport-zoom-in').click()
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-zoom')))
+    .toBeGreaterThan(initialZoom)
+  const canvasBox = await canvasArea.boundingBox()
+  if (!canvasBox) throw new Error('expected canvas area geometry')
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2)
+  const zoomBeforeWheel = Number(await canvasArea.getAttribute('data-zoom'))
+  await page.mouse.wheel(0, -120)
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-zoom')))
+    .toBeGreaterThan(zoomBeforeWheel)
+
+  await page.getByTestId('viewport-reset').click()
+  await expect(canvasArea).toHaveAttribute('data-zoom', '1')
+  await page.getByTestId('viewport-center').click()
+  const centered = {
+    x: Number(await canvasArea.getAttribute('data-pan-x')),
+    y: Number(await canvasArea.getAttribute('data-pan-y')),
+  }
+  await page.getByTestId('viewport-center').click()
+  await expect(canvasArea).toHaveAttribute('data-pan-x', String(centered.x))
+  await expect(canvasArea).toHaveAttribute('data-pan-y', String(centered.y))
+  await page.getByTestId('viewport-fit').click()
+  await expect.poll(async () => Number(await canvasArea.getAttribute('data-zoom'))).toBeLessThan(1)
+
+  const panBefore = Number(await canvasArea.getAttribute('data-pan-x'))
+  await page.getByTestId('editor-canvas').click()
+  await page.keyboard.down('Space')
+  await page.mouse.move(canvasBox.x + 200, canvasBox.y + 180)
+  await page.mouse.down()
+  await page.mouse.move(canvasBox.x + 240, canvasBox.y + 210, { steps: 2 })
+  await page.mouse.up()
+  await page.keyboard.up('Space')
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-pan-x')))
+    .toBe(panBefore + 40)
+
+  const finalState = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    return { cells: Array.from(project.grid!.cells), revision: project.revision }
+  })
+  expect(finalState.cells).toEqual(originalCells)
+  expect(finalState.revision).toBe(0)
+  expect(errors).toEqual([])
+})
