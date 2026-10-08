@@ -1,4 +1,5 @@
 import { MAX_PALETTE_INDEX, MIN_PALETTE_INDEX } from '../constants'
+import { srgbChannelToLinear } from './color'
 import type { LabColor, Palette, RgbColor } from './types'
 
 export interface PaletteMatch {
@@ -18,11 +19,6 @@ function assertLabValue(value: number, channel: string): void {
   }
 }
 
-function srgbToLinear(channel: number): number {
-  const normalized = channel / 255
-  return normalized <= 0.04045 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4)
-}
-
 function labCurve(value: number): number {
   const epsilon = 216 / 24389
   const kappa = 24389 / 27
@@ -35,9 +31,9 @@ export function rgbToLab(rgb: RgbColor): LabColor {
   assertRgbChannel(rgb.g, 'g')
   assertRgbChannel(rgb.b, 'b')
 
-  const red = srgbToLinear(rgb.r)
-  const green = srgbToLinear(rgb.g)
-  const blue = srgbToLinear(rgb.b)
+  const red = srgbChannelToLinear(rgb.r)
+  const green = srgbChannelToLinear(rgb.g)
+  const blue = srgbChannelToLinear(rgb.b)
 
   const x = (red * 0.4124564 + green * 0.3575761 + blue * 0.1804375) / 0.95047
   const y = red * 0.2126729 + green * 0.7151522 + blue * 0.072175

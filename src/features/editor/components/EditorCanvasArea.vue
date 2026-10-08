@@ -9,20 +9,26 @@
     :data-pan-y="editor.panY"
     :data-dpr="backing.dpr"
     :data-rendered-beads="summary.beads"
+    :data-labels="summary.labels"
     :data-normal-lines="summary.normalLines"
     :data-major-lines="summary.majorLines"
     :data-coordinates="summary.coordinates"
+    :data-selected-cell="cellKey(editor.selectedCell)"
+    :data-hovered-cell="cellKey(hoveredCell)"
+    :data-preview-cell="cellKey(previewCell)"
+    :data-comparing-source="editor.isComparingSource"
     @wheel.prevent="handleWheel"
     @pointerdown="handlePointerDown"
     @pointermove="handlePointerMove"
     @pointerup="handlePointerEnd"
     @pointercancel="handlePointerEnd"
+    @pointerleave="handlePointerLeave"
   >
     <canvas
       ref="canvas"
       class="editor-canvas"
       data-testid="editor-canvas"
-      aria-label="只读拼豆网格画布"
+      aria-label="拼豆网格画布"
       tabindex="0"
     />
     <p v-if="!grid" class="canvas-empty" data-testid="canvas-empty">暂无 Grid</p>
@@ -30,14 +36,17 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useEditorStore } from '../../../app/stores/editorStore'
 import { MARD_291_PALETTE } from '../../../domain/palette/mard291'
 import type { Grid } from '../../../domain/project/grid'
+import type { CropState, Source } from '../../../domain/project/types'
 import {
   renderBeadGrid,
   type BeadCanvasRenderSummary,
 } from '../../../rendering/bead-canvas-renderer'
+import { hitTestGridCell, type GridCellHit } from '../../../rendering/hit-test'
+import { SourcePreviewCache } from '../../../rendering/source-preview'
 import {
   getCanvasBackingSize,
   MAX_ZOOM,
@@ -45,7 +54,15 @@ import {
   type CanvasSize,
 } from '../../../rendering/viewport'
 
-const props = defineProps<{ grid: Grid | null; projectId: string | null }>()
+const props = withDefaults(
+  defineProps<{
+    grid: Grid | null
+    projectId: string | null
+    source?: Source | null
+    crop?: CropState | null
+  }>(),
+  { source: null, crop: null },
+)
 const emit = defineEmits<{ resize: [size: CanvasSize] }>()
 
 const editor = useEditorStore()
@@ -58,8 +75,16 @@ const summary = reactive<BeadCanvasRenderSummary>({
   normalLines: 0,
   majorLines: 0,
   coordinates: 0,
+  labels: 0,
+  previews: 0,
+  selections: 0,
+  hovers: 0,
   invalidCells: 0,
 })
+const hoveredCell = shallowRef<GridCellHit | null>(null)
+const previewCell = shallowRef<GridCellHit | null>(null)
+const sourcePreview = shallowRef<HTMLCanvasElement | null>(null)
+const sourcePreviewCache = new SourcePreviewCache()
 
 interface ActiveDrag {
   pointerId: number
@@ -74,6 +99,12 @@ let fittedProjectId: string | null = null
 let resizeObserver: ResizeObserver | null = null
 let drawFrame: number | null = null
 let lastDevicePixelRatio = 1
+let compareRequestSequence = 0
+let mounted = false
+
+function cellKey(cell: GridCellHit | null) {
+  return cell ? `${cell.row},${cell.column}` : ''
+}
 
 function requestFrame(callback: (timestamp: number) => void): number {
   return window.requestAnimationFrame
@@ -123,17 +154,32 @@ function scheduleDraw() {
     const context = canvas.value?.getContext('2d')
     if (!context) return
     resizeBackingStore()
+    const colors = getComputedStyle(area.value ?? document.documentElement)
     const result = renderBeadGrid(context, props.grid, MARD_291_PALETTE, {
       viewport: editor.viewport,
       size: canvasSize,
       dpr: backing.dpr,
+      showLabels: editor.showLabels,
+      sourcePreview: editor.isComparingSource ? sourcePreview.value : null,
+      interactions: editor.isComparingSource
+        ? undefined
+        : {
+            previewCell: previewCell.value,
+            selectedCell: editor.selectedCell,
+            hoveredCell: hoveredCell.value,
+          },
+      interactionColors: {
+        preview: colors.getPropertyValue('--color-action').trim() || '#2563eb',
+        selected: colors.getPropertyValue('--color-action').trim() || '#2563eb',
+        hovered: colors.getPropertyValue('--color-text-primary').trim() || '#1f2933',
+      },
     })
     Object.assign(summary, result)
   })
 }
 
 function measureCanvas() {
-  const bounds = area.value?.getBoundingClientRect()
+  const bounds = canvas.value?.getBoundingClientRect()
   if (!bounds) return
 
   const width = Math.max(0, bounds.width)
@@ -190,33 +236,50 @@ function handleKeyUp(event: KeyboardEvent) {
 }
 
 function handlePointerDown(event: PointerEvent) {
+  if (activeDrag) return
   const kind =
     event.button === 1 ? 'middle' : event.button === 0 && spacePressed ? 'space-left' : null
-  if (!kind) return
+  if (kind) {
+    event.preventDefault()
+    clearPointerFeedback()
+    activeDrag = {
+      pointerId: event.pointerId,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      kind,
+    }
+    try {
+      area.value?.setPointerCapture(event.pointerId)
+    } catch {
+      // Pointer capture is best-effort for environments that do not implement it.
+    }
+    return
+  }
 
-  event.preventDefault()
-  activeDrag = {
-    pointerId: event.pointerId,
-    lastX: event.clientX,
-    lastY: event.clientY,
-    kind,
-  }
-  try {
-    area.value?.setPointerCapture(event.pointerId)
-  } catch {
-    // Pointer capture is best-effort for environments that do not implement it.
-  }
+  if (event.button !== 0 || event.isPrimary === false || editor.isComparingSource) return
+  const hit = hitTest(event.clientX, event.clientY)
+  hoveredCell.value = hit
+  previewCell.value = hit
+  editor.setSelectedCell(hit)
+  scheduleDraw()
 }
 
 function handlePointerMove(event: PointerEvent) {
   const drag = activeDrag
-  if (!drag || drag.pointerId !== event.pointerId) return
+  if (drag?.pointerId === event.pointerId) {
+    const deltaX = event.clientX - drag.lastX
+    const deltaY = event.clientY - drag.lastY
+    drag.lastX = event.clientX
+    drag.lastY = event.clientY
+    editor.panBy(deltaX, deltaY)
+    return
+  }
 
-  const deltaX = event.clientX - drag.lastX
-  const deltaY = event.clientY - drag.lastY
-  drag.lastX = event.clientX
-  drag.lastY = event.clientY
-  editor.panBy(deltaX, deltaY)
+  if (activeDrag || editor.isComparingSource) return
+  const hit = hitTest(event.clientX, event.clientY)
+  hoveredCell.value = hit
+  previewCell.value = hit
+  scheduleDraw()
 }
 
 function handlePointerEnd(event: PointerEvent) {
@@ -224,9 +287,25 @@ function handlePointerEnd(event: PointerEvent) {
   clearDrag()
 }
 
+function handlePointerLeave() {
+  clearPointerFeedback()
+}
+
+function clearPointerFeedback() {
+  hoveredCell.value = null
+  previewCell.value = null
+  scheduleDraw()
+}
+
+function hitTest(clientX: number, clientY: number) {
+  const bounds = canvas.value?.getBoundingClientRect()
+  if (!bounds) return null
+  return hitTestGridCell({ x: clientX, y: clientY }, bounds, editor.viewport, props.grid)
+}
+
 function handleWheel(event: WheelEvent) {
   if (!props.grid || canvasSize.width <= 0 || canvasSize.height <= 0) return
-  const bounds = area.value?.getBoundingClientRect()
+  const bounds = canvas.value?.getBoundingClientRect()
   if (!bounds) return
 
   const factor = Math.exp(-event.deltaY * 0.0015)
@@ -237,20 +316,165 @@ function handleWheel(event: WheelEvent) {
   })
 }
 
+function previewInput() {
+  return {
+    projectId: props.projectId,
+    source: props.source,
+    crop: props.crop,
+  }
+}
+
+async function startSourcePreview() {
+  const request = ++compareRequestSequence
+  const input = previewInput()
+  if (!editor.isComparingSource || !input.projectId || !input.source || !input.crop) {
+    editor.setSourceCompareActive(false)
+    return
+  }
+
+  try {
+    const image = await sourcePreviewCache.get(input)
+    if (
+      !mounted ||
+      request !== compareRequestSequence ||
+      !editor.isComparingSource ||
+      input.projectId !== props.projectId ||
+      input.source.originalImage !== props.source?.originalImage ||
+      input.crop.x !== props.crop?.x ||
+      input.crop.y !== props.crop?.y ||
+      input.crop.width !== props.crop?.width ||
+      input.crop.height !== props.crop?.height ||
+      input.crop.rotation !== props.crop?.rotation ||
+      input.crop.aspectRatio !== props.crop?.aspectRatio ||
+      !image
+    ) {
+      return
+    }
+    sourcePreview.value = image
+    scheduleDraw()
+  } catch {
+    if (request === compareRequestSequence && editor.isComparingSource) {
+      editor.setSourceCompareActive(false)
+    }
+  }
+}
+
+function invalidateSourcePreview() {
+  compareRequestSequence += 1
+  sourcePreviewCache.invalidate()
+  sourcePreview.value = null
+  if (editor.isComparingSource) editor.setSourceCompareActive(false)
+  scheduleDraw()
+}
+
+function clearInvalidInteractionCells() {
+  const grid = props.grid
+  if (
+    !grid ||
+    !Number.isSafeInteger(grid.width) ||
+    !Number.isSafeInteger(grid.height) ||
+    grid.width <= 0 ||
+    grid.height <= 0 ||
+    grid.cells.length !== grid.width * grid.height
+  ) {
+    editor.setSelectedCell(null)
+    clearPointerFeedback()
+    if (editor.isComparingSource) editor.setSourceCompareActive(false)
+    return
+  }
+
+  const selected = editor.selectedCell
+  if (selected) {
+    if (
+      selected.row < 0 ||
+      selected.row >= grid.height ||
+      selected.column < 0 ||
+      selected.column >= grid.width
+    ) {
+      editor.setSelectedCell(null)
+    } else {
+      const index = selected.row * grid.width + selected.column
+      if (selected.index !== index) editor.setSelectedCell({ ...selected, index })
+    }
+  }
+
+  if (
+    hoveredCell.value &&
+    (hoveredCell.value.row < 0 ||
+      hoveredCell.value.row >= grid.height ||
+      hoveredCell.value.column < 0 ||
+      hoveredCell.value.column >= grid.width)
+  ) {
+    hoveredCell.value = null
+  }
+  if (
+    previewCell.value &&
+    (previewCell.value.row < 0 ||
+      previewCell.value.row >= grid.height ||
+      previewCell.value.column < 0 ||
+      previewCell.value.column >= grid.width)
+  ) {
+    previewCell.value = null
+  }
+}
+
+function handleWindowBlur() {
+  clearDrag()
+  spacePressed = false
+}
+
 watch(
   () => props.projectId,
-  (projectId) => {
-    if (projectId !== fittedProjectId) fittedProjectId = null
+  (projectId, previousProjectId) => {
+    if (projectId !== previousProjectId) {
+      fittedProjectId = null
+      editor.setSelectedCell(null)
+      clearPointerFeedback()
+      invalidateSourcePreview()
+    }
     tryInitialFit()
     scheduleDraw()
   },
+  { immediate: true },
 )
-watch(() => [props.grid?.cells, props.grid?.width, props.grid?.height], scheduleDraw, {
-  flush: 'post',
-})
+watch(
+  () => [props.grid?.cells, props.grid?.width, props.grid?.height],
+  () => {
+    clearInvalidInteractionCells()
+    scheduleDraw()
+  },
+  { flush: 'post' },
+)
+watch(
+  () => [
+    props.source?.originalImage,
+    props.source?.originalWidth,
+    props.source?.originalHeight,
+    props.source?.mimeType,
+    props.crop?.x,
+    props.crop?.y,
+    props.crop?.width,
+    props.crop?.height,
+    props.crop?.rotation,
+    props.crop?.aspectRatio,
+  ],
+  invalidateSourcePreview,
+)
+watch(() => editor.showLabels, scheduleDraw)
+watch(() => editor.selectedCell, scheduleDraw, { deep: true })
+watch(() => [hoveredCell.value, previewCell.value], scheduleDraw, { deep: true })
+watch(
+  () => editor.isComparingSource,
+  (active) => {
+    compareRequestSequence += 1
+    if (active) void startSourcePreview()
+    else scheduleDraw()
+  },
+)
 watch(() => [editor.zoom, editor.panX, editor.panY], scheduleDraw)
 
 onMounted(() => {
+  mounted = true
   measureCanvas()
   if (typeof ResizeObserver !== 'undefined' && area.value) {
     resizeObserver = new ResizeObserver(measureCanvas)
@@ -259,18 +483,23 @@ onMounted(() => {
   window.addEventListener('resize', measureCanvas)
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keyup', handleKeyUp)
-  window.addEventListener('blur', clearDrag)
+  window.addEventListener('blur', handleWindowBlur)
   lastDevicePixelRatio = window.devicePixelRatio || 1
   scheduleDraw()
 })
 
 onBeforeUnmount(() => {
+  mounted = false
+  compareRequestSequence += 1
+  sourcePreviewCache.invalidate()
+  sourcePreview.value = null
+  if (editor.isComparingSource) editor.setSourceCompareActive(false)
   resizeObserver?.disconnect()
   resizeObserver = null
   window.removeEventListener('resize', measureCanvas)
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('keyup', handleKeyUp)
-  window.removeEventListener('blur', clearDrag)
+  window.removeEventListener('blur', handleWindowBlur)
   clearDrag()
   spacePressed = false
   if (drawFrame !== null) cancelFrame(drawFrame)

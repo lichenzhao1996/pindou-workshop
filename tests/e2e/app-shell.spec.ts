@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { MARD_291_PALETTE_VERSION } from '../../src/domain/palette/version'
 import { DEFAULT_ALGORITHM_VERSION } from '../../src/domain/project/constants'
 import type { Project } from '../../src/domain/project/types'
+import { CELL_SIZE, GRID_AXIS_MARGIN, worldToScreen } from '../../src/rendering/viewport'
 
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -500,5 +501,185 @@ test('TASK-043–047 renders a real Worker Grid and supports viewport, grid and 
   })
   expect(finalState.cells).toEqual(originalCells)
   expect(finalState.revision).toBe(0)
+  expect(errors).toEqual([])
+})
+
+test('TASK-048–050 labels, hit testing, pan priority, and source compare use the real Worker Project', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  const workers: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('worker', (worker) => workers.push(worker.url()))
+
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 15
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#e80bf2'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => (value ? resolve(value) : reject(new Error('PNG encoding failed'))))
+    })
+    const input = document.querySelector<HTMLInputElement>('[data-testid="image-file-input"]')!
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([blob], 'task048-050.png', { type: 'image/png' }))
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByTestId('crop-confirm')).toBeEnabled()
+  await page.getByTestId('crop-confirm').click()
+  await page.getByTestId('grid-width-preset-32').click()
+  await page.getByTestId('generate').click()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-grid-encoding', 'Uint16Array')
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const canvasArea = page.getByTestId('editor-canvas-area')
+  const canvas = page.getByTestId('editor-canvas')
+  const labelToggle = page.getByTestId('editor-label-toggle')
+  await expect(labelToggle).toHaveAttribute('aria-pressed', 'false')
+  await page.getByTestId('viewport-reset').click()
+  await page.getByTestId('viewport-center').click()
+  await labelToggle.click()
+  await expect(labelToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-labels')))
+    .toBeGreaterThan(0)
+
+  await page.getByTestId('viewport-zoom-out').click()
+  await page.getByTestId('viewport-zoom-out').click()
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-zoom')))
+    .toBeLessThan(0.75)
+  await expect(labelToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(canvasArea).toHaveAttribute('data-labels', '0')
+  await page.getByTestId('viewport-zoom-in').click()
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-labels')))
+    .toBeGreaterThan(0)
+
+  const clickCell = async (row: number, column: number) => {
+    const geometry = await page.evaluate(() => {
+      const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+      return {
+        zoom: Number(area.getAttribute('data-zoom')),
+        panX: Number(area.getAttribute('data-pan-x')),
+        panY: Number(area.getAttribute('data-pan-y')),
+      }
+    })
+    const screen = worldToScreen(
+      {
+        x: GRID_AXIS_MARGIN + (column + 0.5) * CELL_SIZE,
+        y: GRID_AXIS_MARGIN + (row + 0.5) * CELL_SIZE,
+      },
+      geometry,
+    )
+    const box = await canvas.boundingBox()
+    if (!box) throw new Error('expected Canvas geometry')
+    await page.mouse.click(box.x + screen.x, box.y + screen.y)
+  }
+
+  await clickCell(4, 4)
+  await expect(canvasArea).toHaveAttribute('data-selected-cell', '4,4')
+  await page.mouse.move((await canvas.boundingBox())!.x - 4, (await canvas.boundingBox())!.y - 4)
+  await expect(canvasArea).toHaveAttribute('data-hovered-cell', '')
+  await expect(canvasArea).toHaveAttribute('data-selected-cell', '4,4')
+
+  const selectedBeforePan = await canvasArea.getAttribute('data-selected-cell')
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('expected Canvas geometry')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down({ button: 'middle' })
+  await page.mouse.move(box.x + box.width / 2 + 28, box.y + box.height / 2 + 16)
+  await page.mouse.up({ button: 'middle' })
+  await expect(canvasArea).toHaveAttribute('data-selected-cell', selectedBeforePan!)
+
+  await page.keyboard.down('Space')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 19, box.y + box.height / 2 + 11)
+  await page.mouse.up()
+  await page.keyboard.up('Space')
+  await expect(canvasArea).toHaveAttribute('data-selected-cell', selectedBeforePan!)
+  await clickCell(6, 7)
+  await expect(canvasArea).toHaveAttribute('data-selected-cell', '6,7')
+
+  const projectBeforeCompare = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    const editor = root.__vue_app__.config.globalProperties.$pinia._s.get('editor')!
+    return {
+      projectId: project.projectId,
+      revision: project.revision,
+      updatedAt: project.updatedAt,
+      cells: Array.from(project.grid!.cells),
+      selectedCell: editor.selectedCell,
+    }
+  })
+  const pixelAt = async (row: number, column: number) =>
+    page.evaluate(
+      ({ row, column }) => {
+        const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+        const canvas = document.querySelector('[data-testid="editor-canvas"]') as HTMLCanvasElement
+        const context = canvas.getContext('2d')!
+        const zoom = Number(area.getAttribute('data-zoom'))
+        const panX = Number(area.getAttribute('data-pan-x'))
+        const panY = Number(area.getAttribute('data-pan-y'))
+        const rect = canvas.getBoundingClientRect()
+        const screenX = (24 + (column + 0.5) * 24) * zoom + panX
+        const screenY = (24 + (row + 0.5) * 24) * zoom + panY
+        const x = Math.floor((screenX * canvas.width) / rect.width)
+        const y = Math.floor((screenY * canvas.height) / rect.height)
+        return Array.from(context.getImageData(x, y, 1, 1).data).slice(0, 3)
+      },
+      { row, column },
+    )
+
+  const sourceButton = page.getByTestId('editor-source-compare')
+  const sourceButtonBox = await sourceButton.boundingBox()
+  if (!sourceButtonBox) throw new Error('expected source compare control')
+  await page.mouse.move(
+    sourceButtonBox.x + sourceButtonBox.width / 2,
+    sourceButtonBox.y + sourceButtonBox.height / 2,
+  )
+  await page.mouse.down()
+  await expect(canvasArea).toHaveAttribute('data-comparing-source', 'true')
+  await expect.poll(async () => pixelAt(12, 12)).toEqual([232, 11, 242])
+  await page.mouse.up()
+  await expect(canvasArea).toHaveAttribute('data-comparing-source', 'false')
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-rendered-beads')))
+    .toBeGreaterThan(0)
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-labels')))
+    .toBeGreaterThan(0)
+
+  const projectAfterCompare = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    const editor = root.__vue_app__.config.globalProperties.$pinia._s.get('editor')!
+    return {
+      projectId: project.projectId,
+      revision: project.revision,
+      updatedAt: project.updatedAt,
+      cells: Array.from(project.grid!.cells),
+      selectedCell: editor.selectedCell,
+    }
+  })
+  expect(projectAfterCompare).toEqual(projectBeforeCompare)
   expect(errors).toEqual([])
 })

@@ -8,11 +8,13 @@
     <div class="editor-workspace">
       <aside class="editor-tools" aria-label="编辑工具" data-testid="editor-tools">
         <h2>编辑工具</h2>
-        <p>当前支持只读画布查看与平移。编辑工具将在后续任务接入。</p>
+        <p>当前支持画布查看、格子定位与平移；改色工具将在后续任务接入。</p>
       </aside>
       <EditorCanvasArea
         :grid="project?.grid ?? null"
         :project-id="project?.projectId ?? null"
+        :source="project?.source ?? null"
+        :crop="project?.crop ?? null"
         @resize="canvasSize = $event"
       />
       <EditorSidebar :project="project" />

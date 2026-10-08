@@ -1,4 +1,5 @@
 export * from './accessors'
+export * from './color'
 export * from './match'
 export * from './mard291'
 export * from './recommend'

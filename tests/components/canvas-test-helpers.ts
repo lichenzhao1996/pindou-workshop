@@ -5,6 +5,7 @@ export function createCanvasContextMock() {
     fillStyle: '',
     strokeStyle: '',
     lineWidth: 1,
+    globalAlpha: 1,
     font: '',
     textAlign: 'left',
     textBaseline: 'alphabetic',
@@ -32,7 +33,9 @@ export function createCanvasContextMock() {
       strokes.push({ color: state.strokeStyle, from: point, to: [x, y] })
     }),
     stroke: vi.fn(),
+    drawImage: vi.fn(),
     fillText: vi.fn((text: string) => labels.push(text)),
+    measureText: vi.fn((text: string) => ({ width: text.length * 7 })),
     get fillStyle() {
       return state.fillStyle
     },
@@ -50,6 +53,12 @@ export function createCanvasContextMock() {
     },
     set lineWidth(value: number) {
       state.lineWidth = value
+    },
+    get globalAlpha() {
+      return state.globalAlpha
+    },
+    set globalAlpha(value: number) {
+      state.globalAlpha = value
     },
     get font() {
       return state.font
@@ -76,33 +85,53 @@ export function createCanvasContextMock() {
 
 export function installCanvasContext(mock: ReturnType<typeof createCanvasContextMock>) {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function () {
+    if ((this as HTMLCanvasElement).dataset.testid !== 'editor-canvas') {
+      return {
+        drawImage: vi.fn(),
+        getImageData(_x: number, _y: number, width: number, height: number) {
+          return { data: new Uint8ClampedArray(width * height * 4) }
+        },
+        createImageData(width: number, height: number) {
+          return { width, height, data: new Uint8ClampedArray(width * height * 4) }
+        },
+        putImageData: vi.fn(),
+      } as unknown as CanvasRenderingContext2D
+    }
     Object.defineProperty(mock.context, 'canvas', { configurable: true, value: this })
     return mock.context
   })
 }
 
-export function installCanvasLayout(width = 320, height = 240, dpr = 1) {
-  const size = { width, height }
+export function installCanvasLayout(width = 320, height = 240, dpr = 1, left = 0, top = 0) {
+  const size = { width, height, left, top }
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
     () =>
       ({
         width: size.width,
         height: size.height,
-        top: 0,
-        right: size.width,
-        bottom: size.height,
-        left: 0,
-        x: 0,
-        y: 0,
+        top: size.top,
+        right: size.left + size.width,
+        bottom: size.top + size.height,
+        left: size.left,
+        x: size.left,
+        y: size.top,
         toJSON: () => ({}),
       }) as DOMRect,
   )
   vi.stubGlobal('devicePixelRatio', dpr)
 
   return {
-    setSize(nextWidth: number, nextHeight: number, nextDpr = dpr) {
+    setSize(
+      nextWidth: number,
+      nextHeight: number,
+      nextDpr = dpr,
+      nextLeft = size.left,
+      nextTop = size.top,
+    ) {
       size.width = nextWidth
       size.height = nextHeight
+      size.left = nextLeft
+      size.top = nextTop
       vi.stubGlobal('devicePixelRatio', nextDpr)
     },
   }

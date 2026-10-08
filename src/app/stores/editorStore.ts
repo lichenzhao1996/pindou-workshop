@@ -12,17 +12,19 @@ import {
   type Viewport,
 } from '../../rendering/viewport'
 
-/**
- * Holds only editor state shared by multiple core components.
- *
- * The tool and palette index are intentionally primitive boundary values until
- * the later editor and Palette tasks define their domain types. Search text,
- * hover, pointer coordinates, dialogs and other transient UI state stay local
- * to their owning components.
- */
+export interface SelectedCell {
+  readonly row: number
+  readonly column: number
+  readonly index: number
+}
+
+/** Holds shared, in-memory editor runtime state; it is not Project data. */
 export const useEditorStore = defineStore('editor', () => {
   const activeTool = ref<string | null>(null)
   const activePaletteIndex = ref<number | null>(null)
+  const showLabels = ref(false)
+  const selectedCell = ref<SelectedCell | null>(null)
+  const isComparingSource = ref(false)
   const zoom = ref(1)
   const panX = ref(0)
   const panY = ref(0)
@@ -38,6 +40,18 @@ export const useEditorStore = defineStore('editor', () => {
 
   function setActivePaletteIndex(index: number | null) {
     activePaletteIndex.value = index
+  }
+
+  function toggleLabels() {
+    showLabels.value = !showLabels.value
+  }
+
+  function setSelectedCell(cell: SelectedCell | null) {
+    selectedCell.value = cell ? { row: cell.row, column: cell.column, index: cell.index } : null
+  }
+
+  function setSourceCompareActive(active: boolean) {
+    isComparingSource.value = active
   }
 
   function setViewport(next: Viewport) {
@@ -81,6 +95,9 @@ export const useEditorStore = defineStore('editor', () => {
   function resetEditorState() {
     activeTool.value = null
     activePaletteIndex.value = null
+    showLabels.value = false
+    selectedCell.value = null
+    isComparingSource.value = false
     zoom.value = 1
     panX.value = 0
     panY.value = 0
@@ -89,12 +106,18 @@ export const useEditorStore = defineStore('editor', () => {
   return {
     activeTool,
     activePaletteIndex,
+    showLabels,
+    selectedCell,
+    isComparingSource,
     zoom,
     panX,
     panY,
     viewport,
     setActiveTool,
     setActivePaletteIndex,
+    toggleLabels,
+    setSelectedCell,
+    setSourceCompareActive,
     setViewport,
     setZoom,
     zoomIn,
