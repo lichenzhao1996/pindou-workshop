@@ -15,6 +15,9 @@ import {
   type GenerationWorkerClient,
 } from '../../domain/generation/worker-client'
 import type { Project } from '../../domain/project'
+import { applyGridOperation as applyProjectGridOperation } from '../../domain/project/operations'
+import type { GridOperation } from '../../domain/project/operations'
+import type { Grid } from '../../domain/project/grid'
 
 export type GenerationStatus = 'idle' | 'generating' | 'success' | 'error'
 
@@ -58,6 +61,32 @@ export const useProjectStore = defineStore('project', () => {
 
   function clearCurrentProject() {
     setCurrentProject(null)
+  }
+
+  /**
+   * Commits one immutable edit only while the captured Project and Grid are still current.
+   * A gesture therefore cannot write an older Grid over a switched or edited Project.
+   */
+  function applyGridOperation(
+    operation: GridOperation,
+    expectedProject: Project,
+    expectedGrid: Grid,
+    now?: Date,
+  ): boolean {
+    const project = currentProject.value
+    if (
+      !project ||
+      project !== expectedProject ||
+      project.grid !== expectedGrid ||
+      expectedProject.grid !== expectedGrid
+    ) {
+      return false
+    }
+
+    const result = applyProjectGridOperation(project, operation, now)
+    if (!result.changed) return false
+    currentProject.value = result.project
+    return true
   }
 
   function prepareGenerationRequest(): ProjectGenerationRequest | null {
@@ -217,6 +246,7 @@ export const useProjectStore = defineStore('project', () => {
     pendingGenerationRequest,
     setCurrentProject,
     clearCurrentProject,
+    applyGridOperation,
     prepareGenerationRequest,
     beginGeneration,
     isCurrentGenerationRequest,

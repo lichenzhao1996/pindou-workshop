@@ -844,3 +844,217 @@ test('TASK-051–055 uses the shared color picker on the real Worker Project wit
   expect(after.recent[0]).toBe(similarIndex)
   expect(errors).toEqual([])
 })
+
+test('TASK-056–061 applies, paints, erases, eyedrops and fills the real Worker Grid', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  const workers: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('worker', (worker) => workers.push(worker.url()))
+
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 32, 24, generationStartedAt)
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+  await page.getByTestId('viewport-reset').click()
+  await page.getByTestId('viewport-center').click()
+
+  const editorState = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('#app') as HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: {
+              $pinia: {
+                _s: Map<
+                  string,
+                  {
+                    currentProject?: Project
+                    activePaletteIndex?: number | null
+                    selectedCell?: { row: number; column: number; index: number } | null
+                    isComparingSource?: boolean
+                  }
+                >
+              }
+            }
+          }
+        }
+      }
+      const stores = root.__vue_app__.config.globalProperties.$pinia._s
+      const project = stores.get('project')!.currentProject!
+      const editor = stores.get('editor')!
+      return {
+        cells: Array.from(project.grid!.cells),
+        revision: project.revision,
+        updatedAt: project.updatedAt,
+        projectId: project.projectId,
+        activePaletteIndex: editor.activePaletteIndex,
+        selectedCell: editor.selectedCell,
+        isComparingSource: editor.isComparingSource,
+      }
+    })
+
+  const selectColor = async (index: number) => {
+    if (!(await page.getByTestId('unified-color-picker-dialog').isVisible())) {
+      await page.getByTestId('unified-color-picker-toggle').click()
+    }
+    await page.getByTestId('picker-search').fill(`A${index}`)
+    await page.getByTestId(`picker-color-${index}`).click()
+    await page.getByTestId('picker-close').click()
+  }
+
+  const clickCell = async (row: number, column: number) => {
+    const geometry = await page.evaluate(() => {
+      const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+      return {
+        zoom: Number(area.getAttribute('data-zoom')),
+        panX: Number(area.getAttribute('data-pan-x')),
+        panY: Number(area.getAttribute('data-pan-y')),
+      }
+    })
+    const screen = worldToScreen(
+      {
+        x: GRID_AXIS_MARGIN + (column + 0.5) * CELL_SIZE,
+        y: GRID_AXIS_MARGIN + (row + 0.5) * CELL_SIZE,
+      },
+      geometry,
+    )
+    const canvas = await page.getByTestId('editor-canvas').boundingBox()
+    if (!canvas) throw new Error('expected Editor Canvas bounds')
+    await page.mouse.click(canvas.x + screen.x, canvas.y + screen.y)
+  }
+
+  await selectColor(26)
+  const beforeSingle = await editorState()
+  await clickCell(0, 0)
+  await expect(page.getByTestId('editor-selected-cell')).toContainText('第 1 行、第 1 列')
+  await page.getByTestId('apply-current-color').click()
+  const afterSingle = await editorState()
+  expect(afterSingle.cells[0]).toBe(26)
+  expect(afterSingle.revision).toBe(beforeSingle.revision + 1)
+
+  await page.getByTestId('editor-tool-brush').click()
+  const beforeBrush = await editorState()
+  const brushStart = await page.getByTestId('editor-canvas').boundingBox()
+  if (!brushStart) throw new Error('expected Editor Canvas bounds')
+  const brushGeometry = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const brushFrom = worldToScreen(
+    { x: GRID_AXIS_MARGIN + 17.5 * CELL_SIZE, y: GRID_AXIS_MARGIN + 5.5 * CELL_SIZE },
+    brushGeometry,
+  )
+  const brushTo = worldToScreen(
+    { x: GRID_AXIS_MARGIN + 20.5 * CELL_SIZE, y: GRID_AXIS_MARGIN + 5.5 * CELL_SIZE },
+    brushGeometry,
+  )
+  await page.mouse.move(brushStart.x + brushFrom.x, brushStart.y + brushFrom.y)
+  await page.mouse.down()
+  await page.mouse.move(brushStart.x + brushTo.x, brushStart.y + brushTo.y, { steps: 1 })
+  await page.mouse.up()
+  const afterBrush = await editorState()
+  expect(afterBrush.revision).toBe(beforeBrush.revision + 1)
+  expect(afterBrush.cells.slice(5 * 32 + 17, 5 * 32 + 21)).toEqual([26, 26, 26, 26])
+
+  await page.getByTestId('editor-tool-eraser').click()
+  const beforeErase = await editorState()
+  await clickCell(5, 18)
+  const afterErase = await editorState()
+  expect(afterErase.cells[5 * 32 + 18]).toBe(0)
+  expect(afterErase.revision).toBe(beforeErase.revision + 1)
+
+  await page.getByTestId('editor-tool-eyedropper').click()
+  const beforeEyedropper = await editorState()
+  await clickCell(5, 30)
+  const afterEyedropper = await editorState()
+  expect(afterEyedropper.activePaletteIndex).toBe(afterEyedropper.cells[5 * 32 + 30])
+  expect(afterEyedropper.revision).toBe(beforeEyedropper.revision)
+  expect(afterEyedropper.cells).toEqual(beforeEyedropper.cells)
+  expect(afterEyedropper.selectedCell).toEqual(beforeEyedropper.selectedCell)
+
+  await selectColor(26)
+  await page.getByTestId('editor-tool-fill').click()
+  const beforeFill = await editorState()
+  await clickCell(10, 30)
+  const afterFill = await editorState()
+  expect(afterFill.revision).toBe(beforeFill.revision + 1)
+  expect(afterFill.cells.filter((value) => value === 35).length).toBeLessThan(
+    beforeFill.cells.filter((value) => value === 35).length,
+  )
+
+  await page.getByTestId('editor-tool-brush').click()
+  const beforePan = await editorState()
+  const canvasBox = await page.getByTestId('editor-canvas').boundingBox()
+  if (!canvasBox) throw new Error('expected Editor Canvas bounds')
+  await page.getByTestId('editor-canvas').focus()
+  await page.keyboard.down('Space')
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(
+    canvasBox.x + canvasBox.width / 2 + 20,
+    canvasBox.y + canvasBox.height / 2 + 12,
+  )
+  await page.mouse.up()
+  await page.keyboard.up('Space')
+  const afterPan = await editorState()
+  expect(afterPan.revision).toBe(beforePan.revision)
+  expect(afterPan.cells).toEqual(beforePan.cells)
+
+  const sourceButton = page.getByTestId('editor-source-compare')
+  const sourceButtonBox = await sourceButton.boundingBox()
+  const canvasBounds = await page.getByTestId('editor-canvas').boundingBox()
+  if (!sourceButtonBox || !canvasBounds) throw new Error('expected compare and Canvas bounds')
+  await page.mouse.move(
+    sourceButtonBox.x + sourceButtonBox.width / 2,
+    sourceButtonBox.y + sourceButtonBox.height / 2,
+  )
+  await page.mouse.down()
+  await expect(page.getByTestId('editor-canvas-area')).toHaveAttribute(
+    'data-comparing-source',
+    'true',
+  )
+  await page.evaluate(
+    ({ x, y }) => {
+      const canvas = document.querySelector('[data-testid="editor-canvas-area"]')!
+      canvas.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId: 91,
+          clientX: x,
+          clientY: y,
+        }),
+      )
+      canvas.dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId: 91,
+          clientX: x,
+          clientY: y,
+        }),
+      )
+    },
+    { x: canvasBounds.x + 36, y: canvasBounds.y + 36 },
+  )
+  await page.mouse.up()
+  await expect(page.getByTestId('editor-canvas-area')).toHaveAttribute(
+    'data-comparing-source',
+    'false',
+  )
+  const afterCompare = await editorState()
+  expect(afterCompare.revision).toBe(afterPan.revision)
+  expect(afterCompare.cells).toEqual(afterPan.cells)
+  expect(afterCompare.projectId).toBe(beforeSingle.projectId)
+  expect(errors).toEqual([])
+})

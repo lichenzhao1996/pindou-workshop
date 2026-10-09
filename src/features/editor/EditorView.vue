@@ -8,7 +8,7 @@
     <div class="editor-workspace">
       <aside class="editor-tools" aria-label="编辑工具" data-testid="editor-tools">
         <h2>编辑工具</h2>
-        <p>当前支持画布查看、格子定位与平移；改色工具将在后续任务接入。</p>
+        <p>选择颜色后，可使用工具栏中的画笔、橡皮擦、吸管与填充工具编辑拼豆图。</p>
         <UnifiedColorPicker
           :model-value="editor.activePaletteIndex"
           :project="project"
@@ -16,6 +16,7 @@
         />
       </aside>
       <EditorCanvasArea
+        :project="project"
         :grid="project?.grid ?? null"
         :project-id="project?.projectId ?? null"
         :source="project?.source ?? null"

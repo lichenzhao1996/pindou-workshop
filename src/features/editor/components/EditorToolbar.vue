@@ -1,6 +1,30 @@
 <template>
   <div class="viewport-toolbar" role="toolbar" aria-label="画布视口" data-testid="editor-toolbar">
     <div class="viewport-actions">
+      <div class="tool-actions" aria-label="编辑工具" role="group">
+        <button
+          v-for="tool in tools"
+          :key="tool.value"
+          type="button"
+          :data-testid="`editor-tool-${tool.value}`"
+          :aria-pressed="editor.activeTool === tool.value"
+          :disabled="!props.grid"
+          @click="editor.setActiveTool(tool.value)"
+        >
+          {{ tool.label }}
+        </button>
+        <label v-if="editor.activeTool === 'fill'" class="fill-target">
+          填充目标
+          <select
+            data-testid="editor-fill-target-mode"
+            :value="editor.fillTargetMode"
+            @change="setFillTargetMode"
+          >
+            <option value="active-color">当前颜色</option>
+            <option value="empty">清空为 EMPTY</option>
+          </select>
+        </label>
+      </div>
       <button
         ref="compareButton"
         type="button"
@@ -70,11 +94,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../../app/stores/editorStore'
+import type { EditorTool, FillTargetMode } from '../../../app/stores/editorStore'
 import type { Grid } from '../../../domain/project/grid'
 import { MAX_ZOOM, MIN_ZOOM, type CanvasSize } from '../../../rendering/viewport'
 
 const props = defineProps<{ grid: Grid | null; canvasSize: CanvasSize }>()
 const editor = useEditorStore()
+const tools: Array<{ value: EditorTool; label: string }> = [
+  { value: 'select', label: '选择' },
+  { value: 'brush', label: '画笔' },
+  { value: 'eraser', label: '橡皮擦' },
+  { value: 'eyedropper', label: '吸管' },
+  { value: 'fill', label: '填充' },
+]
 const compareButton = ref<HTMLButtonElement | null>(null)
 let activePointerId: number | null = null
 let activeKeyboardKey: 'Space' | 'Enter' | null = null
@@ -82,6 +114,13 @@ const canOperate = computed(
   () => props.grid !== null && props.canvasSize.width > 0 && props.canvasSize.height > 0,
 )
 const anchor = computed(() => ({ x: props.canvasSize.width / 2, y: props.canvasSize.height / 2 }))
+
+function setFillTargetMode(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  if (value === 'active-color' || value === 'empty') {
+    editor.setFillTargetMode(value as FillTargetMode)
+  }
+}
 
 function center() {
   if (props.grid && canOperate.value) editor.centerGrid(props.grid, props.canvasSize)
@@ -195,6 +234,36 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+  border-right: var(--border-width) solid var(--color-border);
+}
+
+.tool-actions button[aria-pressed='true'] {
+  border-color: var(--color-action);
+  color: var(--color-action);
+}
+
+.fill-target {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.fill-target select {
+  max-width: 10rem;
+  padding: var(--space-1);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-background);
+  color: var(--color-text-primary);
 }
 
 button {

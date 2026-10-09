@@ -44,7 +44,7 @@ describe('TASK-004 Pinia boundaries', () => {
   it('keeps one shared active tool and palette index in the editor store', () => {
     const store = useEditorStore()
 
-    expect(store.activeTool).toBeNull()
+    expect(store.activeTool).toBe('select')
     expect(store.activePaletteIndex).toBeNull()
 
     store.setActiveTool('select')
@@ -53,7 +53,7 @@ describe('TASK-004 Pinia boundaries', () => {
     expect(store.activePaletteIndex).toBe(1)
 
     store.resetEditorState()
-    expect(store.activeTool).toBeNull()
+    expect(store.activeTool).toBe('select')
     expect(store.activePaletteIndex).toBeNull()
   })
 
@@ -68,6 +68,6 @@ describe('TASK-004 Pinia boundaries', () => {
 
     const wrapper = mount(Component, { global: { plugins: [pinia] } })
 
-    expect(wrapper.text()).toBe('none')
+    expect(wrapper.text()).toBe('select')
   })
 })

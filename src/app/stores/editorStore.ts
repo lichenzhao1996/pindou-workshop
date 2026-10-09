@@ -19,9 +19,13 @@ export interface SelectedCell {
   readonly index: number
 }
 
+export type EditorTool = 'select' | 'brush' | 'eraser' | 'eyedropper' | 'fill'
+export type FillTargetMode = 'active-color' | 'empty'
+
 /** Holds shared, in-memory editor runtime state; it is not Project data. */
 export const useEditorStore = defineStore('editor', () => {
-  const activeTool = ref<string | null>(null)
+  const activeTool = ref<EditorTool>('select')
+  const fillTargetMode = ref<FillTargetMode>('active-color')
   const activePaletteIndex = ref<number | null>(null)
   const recentPaletteIndexes = ref<number[]>([])
   const showLabels = ref(false)
@@ -36,8 +40,12 @@ export const useEditorStore = defineStore('editor', () => {
     panY: panY.value,
   }))
 
-  function setActiveTool(tool: string | null) {
+  function setActiveTool(tool: EditorTool) {
     activeTool.value = tool
+  }
+
+  function setFillTargetMode(mode: FillTargetMode) {
+    fillTargetMode.value = mode
   }
 
   function setActivePaletteIndex(index: number | null) {
@@ -111,7 +119,8 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function resetEditorState() {
-    activeTool.value = null
+    activeTool.value = 'select'
+    fillTargetMode.value = 'active-color'
     activePaletteIndex.value = null
     recentPaletteIndexes.value = []
     showLabels.value = false
@@ -124,6 +133,7 @@ export const useEditorStore = defineStore('editor', () => {
 
   return {
     activeTool,
+    fillTargetMode,
     activePaletteIndex,
     recentPaletteIndexes,
     showLabels,
@@ -134,6 +144,7 @@ export const useEditorStore = defineStore('editor', () => {
     panY,
     viewport,
     setActiveTool,
+    setFillTargetMode,
     setActivePaletteIndex,
     selectPaletteIndex,
     toggleLabels,
