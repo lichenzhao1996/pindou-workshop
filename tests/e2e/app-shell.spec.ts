@@ -683,3 +683,164 @@ test('TASK-048–050 labels, hit testing, pan priority, and source compare use t
   expect(projectAfterCompare).toEqual(projectBeforeCompare)
   expect(errors).toEqual([])
 })
+
+test('TASK-051–055 uses the shared color picker on the real Worker Project without editing its Grid', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  const workers: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('worker', (worker) => workers.push(worker.url()))
+
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 20
+    canvas.height = 15
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#e80bf2'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => (value ? resolve(value) : reject(new Error('PNG encoding failed'))))
+    })
+    const input = document.querySelector<HTMLInputElement>('[data-testid="image-file-input"]')!
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([blob], 'task051-055.png', { type: 'image/png' }))
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await expect(page).toHaveURL(/\/crop$/)
+  await page.getByTestId('crop-confirm').click()
+  await page.getByTestId('grid-width-preset-32').click()
+  await page.getByTestId('generate').click()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-grid-encoding', 'Uint16Array')
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const before = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    return {
+      projectId: project.projectId,
+      revision: project.revision,
+      updatedAt: project.updatedAt,
+      cells: Array.from(project.grid!.cells),
+    }
+  })
+
+  await page.getByTestId('unified-color-picker-toggle').click()
+  const dialog = page.getByTestId('unified-color-picker-dialog')
+  await expect(dialog).toHaveAttribute('data-browse-mode', 'family')
+  await expect(page.locator('.picker-results .palette-color-button')).toHaveCount(291)
+
+  const search = page.getByTestId('picker-search')
+  await search.fill(' A26 ')
+  await expect(page.locator('.picker-results .palette-color-button')).toHaveCount(1)
+  await page.getByTestId('picker-mode-code').click()
+  await expect(dialog).toHaveAttribute('data-browse-mode', 'code')
+  await expect(search).toHaveValue(' A26 ')
+  await page.getByTestId('picker-color-26').click()
+  await expect(page.getByTestId('picker-color-26')).toHaveAttribute('aria-pressed', 'true')
+
+  const selectedState = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<string, { activePaletteIndex: number | null; recentPaletteIndexes: number[] }>
+            }
+          }
+        }
+      }
+    }
+    const editor = root.__vue_app__.config.globalProperties.$pinia._s.get('editor')!
+    return { active: editor.activePaletteIndex, recent: [...editor.recentPaletteIndexes] }
+  })
+  expect(selectedState.active).toBe(26)
+  expect(selectedState.recent[0]).toBe(26)
+
+  await page.getByTestId('picker-clear-search').click()
+  await expect(page.locator('.used-color-row').first()).toBeVisible()
+  const currentUsedId = await page.locator('.used-color-row').first().getAttribute('data-testid')
+  if (!currentUsedId) throw new Error('expected a color derived from the generated Grid')
+  const usedIndex = Number(currentUsedId.replace('picker-used-', ''))
+  await page.getByTestId(currentUsedId).click()
+  await expect(page.getByTestId(`picker-used-${usedIndex}`)).toHaveAttribute('aria-pressed', 'true')
+  await page.getByTestId('picker-details-toggle').click()
+  await expect(page.getByTestId('picker-details')).toBeVisible()
+  await expect(page.getByTestId('picker-detail-count')).not.toHaveText('0')
+  const similar = page.locator('.picker-detail-content button[data-testid^="picker-similar-"]')
+  await expect(similar).toHaveCount(6)
+  const similarId = await similar.first().getAttribute('data-testid')
+  if (!similarId) throw new Error('expected a formal similar Palette color')
+  const similarIndex = Number(similarId.replace('picker-similar-', ''))
+  await similar.first().click()
+  await expect(page.getByTestId('picker-details')).toBeVisible()
+  const afterSimilarSelection = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<string, { activePaletteIndex: number | null; recentPaletteIndexes: number[] }>
+            }
+          }
+        }
+      }
+    }
+    const editor = root.__vue_app__.config.globalProperties.$pinia._s.get('editor')!
+    return { active: editor.activePaletteIndex, recent: [...editor.recentPaletteIndexes] }
+  })
+  expect(afterSimilarSelection.active).toBe(similarIndex)
+  expect(afterSimilarSelection.recent[0]).toBe(similarIndex)
+
+  await page.getByTestId('picker-close').click()
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await expect(dialog).toHaveAttribute('data-browse-mode', 'family')
+  await expect(search).toHaveValue('')
+
+  const after = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<
+                string,
+                {
+                  currentProject: Project
+                  activePaletteIndex: number | null
+                  recentPaletteIndexes: number[]
+                }
+              >
+            }
+          }
+        }
+      }
+    }
+    const stores = root.__vue_app__.config.globalProperties.$pinia._s
+    const project = stores.get('project')!.currentProject
+    const editor = stores.get('editor')!
+    return {
+      projectId: project.projectId,
+      revision: project.revision,
+      updatedAt: project.updatedAt,
+      cells: Array.from(project.grid!.cells),
+      active: editor.activePaletteIndex,
+      recent: [...editor.recentPaletteIndexes],
+    }
+  })
+  expect(after.projectId).toBe(before.projectId)
+  expect(after.revision).toBe(before.revision)
+  expect(after.updatedAt).toBe(before.updatedAt)
+  expect(after.cells).toEqual(before.cells)
+  expect(after.active).toBe(similarIndex)
+  expect(after.recent[0]).toBe(similarIndex)
+  expect(errors).toEqual([])
+})

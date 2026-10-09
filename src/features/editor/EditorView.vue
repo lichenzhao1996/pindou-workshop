@@ -9,6 +9,11 @@
       <aside class="editor-tools" aria-label="编辑工具" data-testid="editor-tools">
         <h2>编辑工具</h2>
         <p>当前支持画布查看、格子定位与平移；改色工具将在后续任务接入。</p>
+        <UnifiedColorPicker
+          :model-value="editor.activePaletteIndex"
+          :project="project"
+          @update:model-value="selectPaletteIndex"
+        />
       </aside>
       <EditorCanvasArea
         :grid="project?.grid ?? null"
@@ -26,15 +31,22 @@
 import { computed, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
+import { useEditorStore } from '../../app/stores/editorStore'
 import type { CanvasSize } from '../../rendering/viewport'
 import EditorToolbar from './components/EditorToolbar.vue'
 import EditorCanvasArea from './components/EditorCanvasArea.vue'
 import EditorSidebar from './components/EditorSidebar.vue'
+import UnifiedColorPicker from './components/UnifiedColorPicker.vue'
 
 const store = useProjectStore()
+const editor = useEditorStore()
 const router = useRouter()
 const project = computed(() => store.currentProject)
 const canvasSize = shallowRef<CanvasSize>({ width: 0, height: 0 })
+
+function selectPaletteIndex(paletteIndex: number) {
+  editor.selectPaletteIndex(paletteIndex)
+}
 
 watch(
   () => project.value?.grid,

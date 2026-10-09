@@ -64,9 +64,16 @@ export function filterPaletteByFamily(palette: Palette, family: string): readonl
 export function groupPaletteByFamily(
   palette: Palette,
 ): ReadonlyMap<string, readonly PaletteEntry[]> {
+  return groupPaletteEntriesByFamily(palette.entries)
+}
+
+/** Groups already-filtered Palette entries, preserving formal display-code order. */
+export function groupPaletteEntriesByFamily(
+  entries: readonly PaletteEntry[],
+): ReadonlyMap<string, readonly PaletteEntry[]> {
   const groups = new Map<string, PaletteEntry[]>()
 
-  for (const entry of palette.entries) {
+  for (const entry of sortPaletteEntries(entries, 'displayCode')) {
     const group = groups.get(entry.family)
     if (group) {
       group.push(entry)

@@ -12,7 +12,7 @@ export interface SimilarPaletteColor {
 export function findSimilarPaletteColors(
   palette: Palette,
   colorId: string,
-  limit = 5,
+  limit = 6,
 ): readonly SimilarPaletteColor[] {
   if (!Number.isInteger(limit) || limit <= 0) {
     return []

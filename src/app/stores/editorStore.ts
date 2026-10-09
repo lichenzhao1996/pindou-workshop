@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { MAX_PALETTE_INDEX, MIN_PALETTE_INDEX } from '../../domain/project/constants'
 import type { Grid } from '../../domain/project/grid'
 import {
   clampZoom,
@@ -22,6 +23,7 @@ export interface SelectedCell {
 export const useEditorStore = defineStore('editor', () => {
   const activeTool = ref<string | null>(null)
   const activePaletteIndex = ref<number | null>(null)
+  const recentPaletteIndexes = ref<number[]>([])
   const showLabels = ref(false)
   const selectedCell = ref<SelectedCell | null>(null)
   const isComparingSource = ref(false)
@@ -39,7 +41,23 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function setActivePaletteIndex(index: number | null) {
+    if (index !== null && !isValidPaletteIndex(index)) return
     activePaletteIndex.value = index
+  }
+
+  function selectPaletteIndex(index: number): boolean {
+    if (!isValidPaletteIndex(index)) return false
+
+    activePaletteIndex.value = index
+    recentPaletteIndexes.value = [
+      index,
+      ...recentPaletteIndexes.value.filter((recentIndex) => recentIndex !== index),
+    ].slice(0, 8)
+    return true
+  }
+
+  function isValidPaletteIndex(index: number): boolean {
+    return Number.isInteger(index) && index >= MIN_PALETTE_INDEX && index <= MAX_PALETTE_INDEX
   }
 
   function toggleLabels() {
@@ -95,6 +113,7 @@ export const useEditorStore = defineStore('editor', () => {
   function resetEditorState() {
     activeTool.value = null
     activePaletteIndex.value = null
+    recentPaletteIndexes.value = []
     showLabels.value = false
     selectedCell.value = null
     isComparingSource.value = false
@@ -106,6 +125,7 @@ export const useEditorStore = defineStore('editor', () => {
   return {
     activeTool,
     activePaletteIndex,
+    recentPaletteIndexes,
     showLabels,
     selectedCell,
     isComparingSource,
@@ -115,6 +135,7 @@ export const useEditorStore = defineStore('editor', () => {
     viewport,
     setActiveTool,
     setActivePaletteIndex,
+    selectPaletteIndex,
     toggleLabels,
     setSelectedCell,
     setSourceCompareActive,
