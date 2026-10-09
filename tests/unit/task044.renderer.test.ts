@@ -1,32 +1,43 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MARD_291_PALETTE } from '../../src/domain/palette/mard291'
 import { EMPTY, createGrid } from '../../src/domain/project'
+import { CELL_SIZE } from '../../src/rendering/cell-size'
 import { renderBeadGrid } from '../../src/rendering/bead-canvas-renderer'
 
 function makeContext(width = 1000, height = 1000) {
   const state = {
     fillStyle: '',
     strokeStyle: '',
+    globalAlpha: 1,
     lineWidth: 1,
     font: '',
     textAlign: 'left',
     textBaseline: 'alphabetic',
   }
   const fills: Array<{ x: number; y: number; width: number; height: number; color: string }> = []
+  const fillAlphas: number[] = []
+  const alphaStack: number[] = []
   const labels: string[] = []
   const canvas = { width, height } as HTMLCanvasElement
   const context = {
     canvas,
     setTransform: vi.fn(),
     clearRect: vi.fn(),
+    save: vi.fn(() => alphaStack.push(state.globalAlpha)),
+    restore: vi.fn(() => {
+      state.globalAlpha = alphaStack.pop() ?? 1
+    }),
     fillRect: vi.fn((x: number, y: number, rectWidth: number, rectHeight: number) => {
       fills.push({ x, y, width: rectWidth, height: rectHeight, color: state.fillStyle })
+      fillAlphas.push(state.globalAlpha)
     }),
+    drawImage: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
     lineTo: vi.fn(),
     stroke: vi.fn(),
     fillText: vi.fn((text: string) => labels.push(text)),
+    measureText: vi.fn((text: string) => ({ width: text.length * 7 })),
     get fillStyle() {
       return state.fillStyle
     },
@@ -38,6 +49,12 @@ function makeContext(width = 1000, height = 1000) {
     },
     set strokeStyle(value: string) {
       state.strokeStyle = value
+    },
+    get globalAlpha() {
+      return state.globalAlpha
+    },
+    set globalAlpha(value: number) {
+      state.globalAlpha = value
     },
     get lineWidth() {
       return state.lineWidth
@@ -65,7 +82,7 @@ function makeContext(width = 1000, height = 1000) {
     },
   } as unknown as CanvasRenderingContext2D
 
-  return { context, fills, labels }
+  return { context, fills, fillAlphas, labels }
 }
 
 describe('TASK-044 Canvas Grid renderer', () => {
@@ -129,5 +146,71 @@ describe('TASK-044 Canvas Grid renderer', () => {
         dpr: 1,
       }).invalidCells,
     ).toBe(1)
+  })
+
+  it('applies read-only highlight and replacement mapping with isolated alpha and target labels', () => {
+    const grid = createGrid(4, 1)
+    grid.cells.set([1, 2, 3, EMPTY])
+    const original = grid.cells.slice()
+    const { context, fills, fillAlphas, labels } = makeContext()
+
+    const summary = renderBeadGrid(context, grid, MARD_291_PALETTE, {
+      viewport: { zoom: 1, panX: 0, panY: 0 },
+      size: { width: 1000, height: 1000 },
+      dpr: 1,
+      showLabels: true,
+      highlightedPaletteIndex: 1,
+      colorReplacement: { sourcePaletteIndex: 3, targetPaletteIndex: 2 },
+    })
+
+    const beadFills = fills
+      .map((fill, index) => ({ fill, alpha: fillAlphas[index] }))
+      .filter(({ fill }) => fill.width === CELL_SIZE && fill.height === CELL_SIZE)
+    expect(beadFills).toHaveLength(3)
+    expect(beadFills.map(({ fill }) => fill.color)).toEqual([
+      ...[1, 2, 2].map((paletteIndex) => {
+        const { r, g, b } = MARD_291_PALETTE.entries.find(
+          (entry) => entry.paletteIndex === paletteIndex,
+        )!.rgb
+        return `rgb(${r} ${g} ${b})`
+      }),
+    ])
+    expect(beadFills.map(({ alpha }) => alpha)).toEqual([1, 0.24, 0.24])
+    expect(summary).toMatchObject({
+      beads: 3,
+      highlightedBeads: 1,
+      dimmedBeads: 2,
+      replacementBeads: 1,
+    })
+    expect(labels).toContain(
+      MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === 2)!.displayCode,
+    )
+    expect(grid.cells).toEqual(original)
+    expect(context.globalAlpha).toBe(1)
+    expect(context.save).toHaveBeenCalledTimes(1)
+    expect(context.restore).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows source comparison ahead of highlight and replacement overlays', () => {
+    const grid = createGrid(1, 1)
+    grid.cells[0] = 1
+    const { context, fills } = makeContext()
+    const summary = renderBeadGrid(context, grid, MARD_291_PALETTE, {
+      viewport: { zoom: 1, panX: 0, panY: 0 },
+      size: { width: 1000, height: 1000 },
+      dpr: 1,
+      highlightedPaletteIndex: 1,
+      colorReplacement: { sourcePaletteIndex: 1, targetPaletteIndex: 2 },
+      sourcePreview: {} as CanvasImageSource,
+    })
+
+    expect(context.drawImage).toHaveBeenCalled()
+    expect(summary).toMatchObject({
+      beads: 0,
+      highlightedBeads: 0,
+      dimmedBeads: 0,
+      replacementBeads: 0,
+    })
+    expect(fills.filter((fill) => fill.width === CELL_SIZE)).toHaveLength(0)
   })
 })

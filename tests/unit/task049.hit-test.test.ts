@@ -118,10 +118,24 @@ describe('TASK-049 Canvas hit testing', () => {
   it('draws preview, selected, and hovered overlays without changing the single Grid', () => {
     const emptyGrid = createGrid(2, 2)
     const originalCells = emptyGrid.cells.slice()
+    let globalAlpha = 1
+    const alphaStack: number[] = []
     const context = {
       canvas: { width: 240, height: 180 } as HTMLCanvasElement,
       setTransform() {},
       clearRect() {},
+      save() {
+        alphaStack.push(globalAlpha)
+      },
+      restore() {
+        globalAlpha = alphaStack.pop() ?? 1
+      },
+      get globalAlpha() {
+        return globalAlpha
+      },
+      set globalAlpha(value: number) {
+        globalAlpha = value
+      },
       fillRect() {},
       beginPath() {},
       moveTo() {},

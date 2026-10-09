@@ -28,6 +28,7 @@ export const useEditorStore = defineStore('editor', () => {
   const fillTargetMode = ref<FillTargetMode>('active-color')
   const activePaletteIndex = ref<number | null>(null)
   const recentPaletteIndexes = ref<number[]>([])
+  const highlightedPaletteIndex = ref<number | null>(null)
   const showLabels = ref(false)
   const selectedCell = ref<SelectedCell | null>(null)
   const historyRestoreVersion = ref(0)
@@ -59,10 +60,27 @@ export const useEditorStore = defineStore('editor', () => {
     if (!isValidPaletteIndex(index)) return false
 
     activePaletteIndex.value = index
+    recordRecentPaletteIndex(index)
+    return true
+  }
+
+  function recordRecentPaletteIndex(index: number): boolean {
+    if (!isValidPaletteIndex(index)) return false
     recentPaletteIndexes.value = [
       index,
       ...recentPaletteIndexes.value.filter((recentIndex) => recentIndex !== index),
     ].slice(0, 8)
+    return true
+  }
+
+  function setHighlightedPaletteIndex(index: number | null) {
+    if (index !== null && !isValidPaletteIndex(index)) return
+    highlightedPaletteIndex.value = index
+  }
+
+  function toggleHighlightedPaletteIndex(index: number): boolean {
+    if (!isValidPaletteIndex(index)) return false
+    highlightedPaletteIndex.value = highlightedPaletteIndex.value === index ? null : index
     return true
   }
 
@@ -133,6 +151,7 @@ export const useEditorStore = defineStore('editor', () => {
     fillTargetMode.value = 'active-color'
     activePaletteIndex.value = null
     recentPaletteIndexes.value = []
+    highlightedPaletteIndex.value = null
     showLabels.value = false
     selectedCell.value = null
     isComparingSource.value = false
@@ -146,6 +165,7 @@ export const useEditorStore = defineStore('editor', () => {
     fillTargetMode,
     activePaletteIndex,
     recentPaletteIndexes,
+    highlightedPaletteIndex,
     showLabels,
     selectedCell,
     historyRestoreVersion,
@@ -159,6 +179,9 @@ export const useEditorStore = defineStore('editor', () => {
     setFillTargetMode,
     setActivePaletteIndex,
     selectPaletteIndex,
+    recordRecentPaletteIndex,
+    setHighlightedPaletteIndex,
+    toggleHighlightedPaletteIndex,
     toggleLabels,
     setSelectedCell,
     markHistoryRestore,

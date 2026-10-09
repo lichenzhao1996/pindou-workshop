@@ -11,17 +11,24 @@ export function createCanvasContextMock() {
     textBaseline: 'alphabetic',
   }
   const fills: Array<{ x: number; y: number; width: number; height: number; color: string }> = []
+  const fillAlphas: number[] = []
   const strokes: Array<{ color: string; from: [number, number]; to: [number, number] }> = []
   const labels: string[] = []
   const canvas = { width: 0, height: 0 } as HTMLCanvasElement
+  const alphaStack: number[] = []
   let point: [number, number] = [0, 0]
 
   const context = {
     canvas,
     setTransform: vi.fn(),
     clearRect: vi.fn(),
+    save: vi.fn(() => alphaStack.push(state.globalAlpha)),
+    restore: vi.fn(() => {
+      state.globalAlpha = alphaStack.pop() ?? 1
+    }),
     fillRect: vi.fn((x: number, y: number, width: number, height: number) => {
       fills.push({ x, y, width, height, color: state.fillStyle })
+      fillAlphas.push(state.globalAlpha)
     }),
     beginPath: vi.fn(() => {
       point = [0, 0]
@@ -80,30 +87,63 @@ export function createCanvasContextMock() {
     },
   } as unknown as CanvasRenderingContext2D
 
-  return { context, fills, strokes, labels }
+  return { context, fills, fillAlphas, strokes, labels }
 }
 
 export function installCanvasContext(mock: ReturnType<typeof createCanvasContextMock>) {
+  const auxiliaryFills: Array<{ canvas: HTMLCanvasElement; color: string; alpha: number }> = []
+  const auxiliaryContexts = new WeakMap<HTMLCanvasElement, CanvasRenderingContext2D>()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function () {
     if ((this as HTMLCanvasElement).dataset.testid !== 'editor-canvas') {
-      return {
-        canvas: this,
-        setTransform: vi.fn(),
-        clearRect: vi.fn(),
-        fillRect: vi.fn(),
-        drawImage: vi.fn(),
-        getImageData(_x: number, _y: number, width: number, height: number) {
-          return { data: new Uint8ClampedArray(width * height * 4) }
-        },
-        createImageData(width: number, height: number) {
-          return { width, height, data: new Uint8ClampedArray(width * height * 4) }
-        },
-        putImageData: vi.fn(),
-      } as unknown as CanvasRenderingContext2D
+      const element = this as HTMLCanvasElement
+      let context = auxiliaryContexts.get(element)
+      if (!context) {
+        const state = { fillStyle: '', globalAlpha: 1 }
+        const alphaStack: number[] = []
+        context = {
+          canvas: element,
+          setTransform: vi.fn(),
+          clearRect: vi.fn(),
+          save: vi.fn(() => alphaStack.push(state.globalAlpha)),
+          restore: vi.fn(() => {
+            state.globalAlpha = alphaStack.pop() ?? 1
+          }),
+          fillRect: vi.fn(() => {
+            auxiliaryFills.push({
+              canvas: element,
+              color: state.fillStyle,
+              alpha: state.globalAlpha,
+            })
+          }),
+          drawImage: vi.fn(),
+          getImageData(_x: number, _y: number, width: number, height: number) {
+            return { data: new Uint8ClampedArray(width * height * 4) }
+          },
+          createImageData(width: number, height: number) {
+            return { width, height, data: new Uint8ClampedArray(width * height * 4) }
+          },
+          putImageData: vi.fn(),
+          get fillStyle() {
+            return state.fillStyle
+          },
+          set fillStyle(value: string) {
+            state.fillStyle = value
+          },
+          get globalAlpha() {
+            return state.globalAlpha
+          },
+          set globalAlpha(value: number) {
+            state.globalAlpha = value
+          },
+        } as unknown as CanvasRenderingContext2D
+        auxiliaryContexts.set(element, context)
+      }
+      return context
     }
     Object.defineProperty(mock.context, 'canvas', { configurable: true, value: this })
     return mock.context
   })
+  return { auxiliaryFills }
 }
 
 export function installCanvasLayout(width = 320, height = 240, dpr = 1, left = 0, top = 0) {

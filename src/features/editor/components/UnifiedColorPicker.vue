@@ -255,7 +255,10 @@ import {
   type PaletteEntry,
 } from '../../../domain/palette'
 
-const props = defineProps<{ modelValue: number | null; project?: Project | null }>()
+const props = withDefaults(
+  defineProps<{ modelValue: number | null; project?: Project | null; closeOnSelect?: boolean }>(),
+  { project: null, closeOnSelect: false },
+)
 const emit = defineEmits<{ 'update:modelValue': [paletteIndex: number] }>()
 
 type BrowseMode = 'code' | 'family'
@@ -360,6 +363,7 @@ function swatchStyle(entry: PaletteEntry) {
 function selectColor(paletteIndex: number) {
   if (!getPaletteEntryByIndex(MARD_291_PALETTE, paletteIndex)) return
   emit('update:modelValue', paletteIndex)
+  if (props.closeOnSelect) close()
 }
 
 function open() {

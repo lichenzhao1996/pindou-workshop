@@ -21,9 +21,10 @@
         :project-id="project?.projectId ?? null"
         :source="project?.source ?? null"
         :crop="project?.crop ?? null"
+        :replacement-preview="replacementPreview"
         @resize="canvasSize = $event"
       />
-      <EditorSidebar :project="project" />
+      <EditorSidebar :project="project" @replacement-preview="setReplacementPreview" />
     </div>
   </main>
 </template>
@@ -34,6 +35,7 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
 import { useEditorStore } from '../../app/stores/editorStore'
 import type { CanvasSize } from '../../rendering/viewport'
+import type { ReplacementPreview } from './replacement-preview'
 import EditorToolbar from './components/EditorToolbar.vue'
 import EditorCanvasArea from './components/EditorCanvasArea.vue'
 import EditorSidebar from './components/EditorSidebar.vue'
@@ -44,6 +46,19 @@ const editor = useEditorStore()
 const router = useRouter()
 const project = computed(() => store.currentProject)
 const canvasSize = shallowRef<CanvasSize>({ width: 0, height: 0 })
+const replacementPreview = shallowRef<ReplacementPreview | null>(null)
+
+function setReplacementPreview(preview: ReplacementPreview | null) {
+  if (!preview) {
+    replacementPreview.value = null
+    return
+  }
+  const current = store.currentProject
+  replacementPreview.value =
+    current?.projectId === preview.projectId && current.grid?.cells === preview.grid.cells
+      ? preview
+      : null
+}
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
@@ -77,6 +92,16 @@ watch(
     }
   },
   { immediate: true },
+)
+watch(
+  () => ({ projectId: project.value?.projectId, grid: project.value?.grid }),
+  ({ projectId, grid }) => {
+    const preview = replacementPreview.value
+    if (preview && (preview.projectId !== projectId || preview.grid.cells !== grid?.cells)) {
+      replacementPreview.value = null
+    }
+  },
+  { flush: 'sync' },
 )
 
 onMounted(() => window.addEventListener('keydown', handleHistoryShortcut))

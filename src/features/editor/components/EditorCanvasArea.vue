@@ -13,6 +13,11 @@
     :data-normal-lines="summary.normalLines"
     :data-major-lines="summary.majorLines"
     :data-coordinates="summary.coordinates"
+    :data-highlighted-beads="summary.highlightedBeads"
+    :data-dimmed-beads="summary.dimmedBeads"
+    :data-replacement-beads="summary.replacementBeads"
+    :data-highlighted-palette-index="editor.highlightedPaletteIndex ?? ''"
+    :data-replacement-preview="replacementPreviewKey()"
     :data-selected-cell="cellKey(editor.selectedCell)"
     :data-hovered-cell="cellKey(hoveredCell)"
     :data-preview-cell="cellKey(previewCell)"
@@ -46,6 +51,7 @@ import { getFourConnectedRegion } from '../../../domain/project/fill'
 import type { Grid, GridPosition } from '../../../domain/project/grid'
 import type { GridCellChange } from '../../../domain/project/operations'
 import type { CropState, Project, Source } from '../../../domain/project/types'
+import type { ReplacementPreview } from '../replacement-preview'
 import {
   renderBeadGrid,
   type BeadCanvasRenderSummary,
@@ -68,8 +74,9 @@ const props = withDefaults(
     projectId: string | null
     source?: Source | null
     crop?: CropState | null
+    replacementPreview?: ReplacementPreview | null
   }>(),
-  { project: null, source: null, crop: null },
+  { project: null, source: null, crop: null, replacementPreview: null },
 )
 const emit = defineEmits<{ resize: [size: CanvasSize] }>()
 
@@ -88,6 +95,9 @@ const summary = reactive<BeadCanvasRenderSummary>({
   selections: 0,
   hovers: 0,
   invalidCells: 0,
+  highlightedBeads: 0,
+  dimmedBeads: 0,
+  replacementBeads: 0,
 })
 const hoveredCell = shallowRef<GridCellHit | null>(null)
 const previewCell = shallowRef<GridCellHit | null>(null)
@@ -127,6 +137,26 @@ let mounted = false
 
 function cellKey(cell: GridCellHit | null) {
   return cell ? `${cell.row},${cell.column}` : ''
+}
+
+function currentReplacementPreview() {
+  const preview = props.replacementPreview
+  const current = projectStore.currentProject
+  if (
+    !preview ||
+    preview.projectId !== props.projectId ||
+    preview.grid.cells !== props.grid?.cells ||
+    current?.projectId !== preview.projectId ||
+    current.grid?.cells !== preview.grid.cells
+  ) {
+    return null
+  }
+  return preview
+}
+
+function replacementPreviewKey() {
+  const preview = currentReplacementPreview()
+  return preview ? `${preview.sourcePaletteIndex}:${preview.targetPaletteIndex}` : ''
 }
 
 function requestFrame(callback: (timestamp: number) => void): number {
@@ -183,6 +213,8 @@ function scheduleDraw() {
       size: canvasSize,
       dpr: backing.dpr,
       showLabels: editor.showLabels,
+      highlightedPaletteIndex: editor.highlightedPaletteIndex,
+      colorReplacement: currentReplacementPreview(),
       sourcePreview: editor.isComparingSource ? sourcePreview.value : null,
       interactions: editor.isComparingSource
         ? undefined
@@ -267,7 +299,8 @@ function isStrokeValid(stroke: StrokeGesture): boolean {
       (props.project.projectId === stroke.projectId &&
         props.project.grid?.cells === stroke.grid.cells)) &&
     editor.activeTool === stroke.tool &&
-    !editor.isComparingSource,
+    !editor.isComparingSource &&
+    !props.replacementPreview,
   )
 }
 
@@ -420,6 +453,7 @@ function handlePointerDown(event: PointerEvent) {
     return
   }
 
+  if (props.replacementPreview) return
   if (event.button !== 0 || event.isPrimary === false || editor.isComparingSource) return
   const hit = hitTest(event.clientX, event.clientY)
   if (editor.activeTool === 'select') {
@@ -472,7 +506,7 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (activeGesture || editor.isComparingSource) return
+  if (activeGesture || editor.isComparingSource || props.replacementPreview) return
   const hit = hitTest(event.clientX, event.clientY)
   hoveredCell.value = hit
   previewCell.value = hit
@@ -664,6 +698,14 @@ watch(
   },
 )
 watch(
+  () => props.replacementPreview,
+  (preview) => {
+    if (preview && activeGesture?.kind === 'stroke') clearGesture()
+    scheduleDraw()
+  },
+  { flush: 'sync' },
+)
+watch(
   () => [props.project, props.projectId, props.grid, projectStore.currentProject],
   () => {
     cancelStrokeIfStale()
@@ -686,6 +728,7 @@ watch(
   invalidateSourcePreview,
 )
 watch(() => editor.showLabels, scheduleDraw)
+watch(() => editor.highlightedPaletteIndex, scheduleDraw)
 watch(() => editor.selectedCell, scheduleDraw, { deep: true })
 watch(() => [hoveredCell.value, previewCell.value], scheduleDraw, { deep: true })
 watch(

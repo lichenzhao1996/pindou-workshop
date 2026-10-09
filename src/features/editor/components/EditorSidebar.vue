@@ -35,18 +35,23 @@
       <button
         type="button"
         data-testid="apply-current-color"
-        :disabled="!canApplyCurrentColor"
+        :disabled="!canApplyCurrentColor || replacementPreviewActive"
         @click="applyCurrentColor"
       >
         应用当前颜色
       </button>
     </section>
+    <EditorColorManagement
+      :project="project"
+      :stats="stats"
+      @replacement-preview="handleReplacementPreview"
+    />
     <RouterLink to="/crop">返回裁剪与生成设置</RouterLink>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { GENERATION_MODE_LABELS } from '../../../domain/generation/mode'
 import { useEditorStore } from '../../../app/stores/editorStore'
@@ -55,11 +60,15 @@ import { getPaletteEntryByIndex, MARD_291_PALETTE } from '../../../domain/palett
 import { MAX_PALETTE_INDEX, MIN_PALETTE_INDEX } from '../../../domain/project/constants'
 import { deriveProjectStats } from '../../../domain/project/stats'
 import type { Project } from '../../../domain/project/types'
+import type { ReplacementPreview } from '../replacement-preview'
+import EditorColorManagement from './EditorColorManagement.vue'
 
 const props = defineProps<{ project: Project | null }>()
+const emit = defineEmits<{ 'replacement-preview': [preview: ReplacementPreview | null] }>()
 const stats = computed(() => (props.project?.grid ? deriveProjectStats(props.project) : null))
 const editor = useEditorStore()
 const projectStore = useProjectStore()
+const replacementPreviewActive = ref(false)
 const selectedCell = computed(() => editor.selectedCell)
 const activeColor = computed(() =>
   editor.activePaletteIndex === null
@@ -95,8 +104,20 @@ const canApplyCurrentColor = computed(() => {
   )
 })
 
+function handleReplacementPreview(preview: ReplacementPreview | null) {
+  const current = projectStore.currentProject
+  const valid = Boolean(
+    preview &&
+    current?.projectId === preview.projectId &&
+    current.grid?.cells === preview.grid.cells &&
+    props.project?.projectId === preview.projectId,
+  )
+  replacementPreviewActive.value = valid
+  emit('replacement-preview', valid ? preview : null)
+}
+
 function applyCurrentColor() {
-  if (!canApplyCurrentColor.value) return
+  if (!canApplyCurrentColor.value || replacementPreviewActive.value) return
   const project = projectStore.currentProject
   const grid = project?.grid
   const cell = editor.selectedCell

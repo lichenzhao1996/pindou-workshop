@@ -136,7 +136,11 @@ export const useProjectStore = defineStore('project', () => {
       return
     }
 
+    const previousProject = currentProject.value
     if (!compatibleGridLineage(currentProject.value, project)) clearHistory()
+    if (previousProject?.projectId !== project?.projectId || !project?.grid) {
+      useEditorStore().setHighlightedPaletteIndex(null)
+    }
     workerClient?.cancel()
     currentProject.value = project
     generationStatus.value = 'idle'
@@ -324,6 +328,7 @@ export const useProjectStore = defineStore('project', () => {
         now,
       )
       clearHistory()
+      useEditorStore().setHighlightedPaletteIndex(null)
       generationStatus.value = 'success'
       generationError.value = null
       clearGenerationRequest()

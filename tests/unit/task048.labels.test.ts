@@ -5,7 +5,14 @@ import { EMPTY, createGrid } from '../../src/domain/project'
 import { renderBeadGrid } from '../../src/rendering/bead-canvas-renderer'
 
 function createLabelContext() {
-  const state = { fillStyle: '', font: '', textAlign: 'left', textBaseline: 'alphabetic' }
+  const state = {
+    fillStyle: '',
+    font: '',
+    textAlign: 'left',
+    textBaseline: 'alphabetic',
+    globalAlpha: 1,
+  }
+  const alphaStack: number[] = []
   const labels: Array<{
     text: string
     x: number
@@ -18,6 +25,10 @@ function createLabelContext() {
     canvas: { width: 600, height: 400 } as HTMLCanvasElement,
     setTransform: vi.fn(),
     clearRect: vi.fn(),
+    save: vi.fn(() => alphaStack.push(state.globalAlpha)),
+    restore: vi.fn(() => {
+      state.globalAlpha = alphaStack.pop() ?? 1
+    }),
     fillRect: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
@@ -32,6 +43,12 @@ function createLabelContext() {
     },
     set fillStyle(value: string) {
       state.fillStyle = value
+    },
+    get globalAlpha() {
+      return state.globalAlpha
+    },
+    set globalAlpha(value: number) {
+      state.globalAlpha = value
     },
     get font() {
       return state.font

@@ -36,6 +36,9 @@
         data-testid="editor-minimap-canvas"
         aria-label="作品缩略图"
         :data-rendered-beads="renderedBeads"
+        :data-highlighted-beads="highlightedBeads"
+        :data-dimmed-beads="dimmedBeads"
+        :data-highlighted-palette-index="editor.highlightedPaletteIndex ?? ''"
       />
       <div
         v-if="geometry?.frame"
@@ -86,6 +89,8 @@ const geometry = computed(() =>
   deriveMiniMapGeometry(props.grid, miniMapSize, props.canvasSize, editor.viewport),
 )
 const renderedBeads = ref(0)
+const highlightedBeads = ref(0)
+const dimmedBeads = ref(0)
 let resizeObserver: ResizeObserver | null = null
 let drawFrame: number | null = null
 let mounted = false
@@ -145,6 +150,8 @@ function draw() {
   const grid = props.grid
   if (!element || !grid || !geometry.value || miniMapSize.width <= 0 || miniMapSize.height <= 0) {
     renderedBeads.value = 0
+    highlightedBeads.value = 0
+    dimmedBeads.value = 0
     return
   }
   const context = element.getContext('2d')
@@ -160,23 +167,39 @@ function draw() {
 
   const { artwork, scale } = geometry.value
   let count = 0
-  for (let row = 0; row < grid.height; row += 1) {
-    for (let column = 0; column < grid.width; column += 1) {
-      const paletteIndex = grid.cells[row * grid.width + column]
-      if (paletteIndex === EMPTY) continue
-      const color = paletteColors.get(paletteIndex)
-      if (!color) continue
-      context.fillStyle = color
-      context.fillRect(
-        artwork.left + column * CELL_SIZE * scale,
-        artwork.top + row * CELL_SIZE * scale,
-        CELL_SIZE * scale,
-        CELL_SIZE * scale,
-      )
-      count += 1
+  let highlightedCount = 0
+  let dimmedCount = 0
+  context.save()
+  try {
+    for (let row = 0; row < grid.height; row += 1) {
+      for (let column = 0; column < grid.width; column += 1) {
+        const paletteIndex = grid.cells[row * grid.width + column]
+        if (paletteIndex === EMPTY) continue
+        const color = paletteColors.get(paletteIndex)
+        if (!color) continue
+        if (editor.highlightedPaletteIndex !== null) {
+          if (paletteIndex === editor.highlightedPaletteIndex) highlightedCount += 1
+          else dimmedCount += 1
+          context.globalAlpha = paletteIndex === editor.highlightedPaletteIndex ? 1 : 0.24
+        } else {
+          context.globalAlpha = 1
+        }
+        context.fillStyle = color
+        context.fillRect(
+          artwork.left + column * CELL_SIZE * scale,
+          artwork.top + row * CELL_SIZE * scale,
+          CELL_SIZE * scale,
+          CELL_SIZE * scale,
+        )
+        count += 1
+      }
     }
+  } finally {
+    context.restore()
   }
   renderedBeads.value = count
+  highlightedBeads.value = highlightedCount
+  dimmedBeads.value = dimmedCount
 }
 
 function scheduleDraw() {
@@ -280,6 +303,7 @@ watch(
 )
 watch(() => [props.canvasSize.width, props.canvasSize.height], scheduleDraw)
 watch(() => [editor.zoom, editor.panX, editor.panY], scheduleDraw)
+watch(() => editor.highlightedPaletteIndex, scheduleDraw)
 watch(
   () => editor.minimapCollapsed,
   (collapsed) => {

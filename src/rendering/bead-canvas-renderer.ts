@@ -15,6 +15,11 @@ export interface BeadCanvasRenderOptions {
   size: CanvasSize
   dpr: number
   showLabels?: boolean
+  highlightedPaletteIndex?: number | null
+  colorReplacement?: {
+    sourcePaletteIndex: number
+    targetPaletteIndex: number
+  } | null
   sourcePreview?: CanvasImageSource | null
   interactions?: {
     previewCell?: CellOverlay | null
@@ -45,6 +50,9 @@ export interface BeadCanvasRenderSummary {
   selections: number
   hovers: number
   invalidCells: number
+  highlightedBeads: number
+  dimmedBeads: number
+  replacementBeads: number
 }
 
 const EMPTY_BACKGROUND = '#e8edf2'
@@ -81,6 +89,9 @@ export function renderBeadGrid(
     selections: 0,
     hovers: 0,
     invalidCells: 0,
+    highlightedBeads: 0,
+    dimmedBeads: 0,
+    replacementBeads: 0,
   }
   const canvas = context.canvas
 
@@ -137,24 +148,47 @@ export function renderBeadGrid(
     }
   }
 
-  for (let row = visible.startRow; row < visible.endRow; row += 1) {
-    for (let column = visible.startColumn; column < visible.endColumn; column += 1) {
-      const value = grid.cells[row * grid.width + column]
-      if (value === EMPTY) continue
-      if (!Number.isInteger(value) || value < 1 || value > 291 || !colors[value]) {
-        summary.invalidCells += 1
-        continue
-      }
+  const highlighted = options.highlightedPaletteIndex ?? null
+  const replacement = options.colorReplacement
+  context.save()
+  try {
+    for (let row = visible.startRow; row < visible.endRow; row += 1) {
+      for (let column = visible.startColumn; column < visible.endColumn; column += 1) {
+        const value = grid.cells[row * grid.width + column]
+        if (value === EMPTY) continue
+        if (!Number.isInteger(value) || value < 1 || value > 291 || !colors[value]) {
+          summary.invalidCells += 1
+          continue
+        }
 
-      context.fillStyle = colors[value]!
-      context.fillRect(
-        GRID_AXIS_MARGIN + column * CELL_SIZE,
-        GRID_AXIS_MARGIN + row * CELL_SIZE,
-        CELL_SIZE,
-        CELL_SIZE,
-      )
-      summary.beads += 1
+        const displayIndex =
+          replacement && value === replacement.sourcePaletteIndex
+            ? replacement.targetPaletteIndex
+            : value
+        if (!colors[displayIndex]) {
+          summary.invalidCells += 1
+          continue
+        }
+        if (replacement && value === replacement.sourcePaletteIndex) summary.replacementBeads += 1
+        if (highlighted !== null) {
+          if (displayIndex === highlighted) summary.highlightedBeads += 1
+          else summary.dimmedBeads += 1
+          context.globalAlpha = displayIndex === highlighted ? 1 : 0.24
+        } else {
+          context.globalAlpha = 1
+        }
+        context.fillStyle = colors[displayIndex]!
+        context.fillRect(
+          GRID_AXIS_MARGIN + column * CELL_SIZE,
+          GRID_AXIS_MARGIN + row * CELL_SIZE,
+          CELL_SIZE,
+          CELL_SIZE,
+        )
+        summary.beads += 1
+      }
     }
+  } finally {
+    context.restore()
   }
 
   const firstColumnLine = Math.max(0, visible.startColumn)
@@ -215,8 +249,12 @@ export function renderBeadGrid(
     for (let row = visible.startRow; row < visible.endRow; row += 1) {
       for (let column = visible.startColumn; column < visible.endColumn; column += 1) {
         const paletteIndex = grid.cells[row * grid.width + column]
-        const entry = entries[paletteIndex]
-        if (paletteIndex === EMPTY || !entry || !colors[paletteIndex]) continue
+        const displayIndex =
+          replacement && paletteIndex === replacement.sourcePaletteIndex
+            ? replacement.targetPaletteIndex
+            : paletteIndex
+        const entry = entries[displayIndex]
+        if (paletteIndex === EMPTY || !entry || !colors[displayIndex]) continue
 
         context.font = `${LABEL_FONT_SIZE / zoom}px sans-serif`
         const measuredTextWidth = context.measureText(entry.displayCode).width * zoom

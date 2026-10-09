@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { MARD_291_PALETTE_VERSION } from '../../src/domain/palette/version'
+import { MARD_291_PALETTE } from '../../src/domain/palette/mard291'
 import { DEFAULT_ALGORITHM_VERSION } from '../../src/domain/project/constants'
 import type { Project } from '../../src/domain/project/types'
 import { CELL_SIZE, GRID_AXIS_MARGIN, worldToScreen } from '../../src/rendering/viewport'
@@ -867,6 +868,269 @@ test('TASK-062–064 real Worker edit Undo/Redo and MiniMap navigation stay on o
   await expect(page.getByTestId('editor-minimap')).toHaveAttribute('data-collapsed', 'true')
   await page.getByTestId('editor-minimap-toggle').click()
   await expect(page.getByTestId('editor-minimap')).toHaveAttribute('data-collapsed', 'false')
+  expect(errors).toEqual([])
+})
+
+test('TASK-065–068 manages used colors, synchronizes highlight, and replaces through one undoable operation', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  const workerUrls: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const imageCanvas = document.createElement('canvas')
+    imageCanvas.width = 20
+    imageCanvas.height = 15
+    const context = imageCanvas.getContext('2d')!
+    context.fillStyle = '#e80bf2'
+    context.fillRect(0, 0, imageCanvas.width, imageCanvas.height)
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      imageCanvas.toBlob((value) =>
+        value ? resolve(value) : reject(new Error('PNG encoding failed')),
+      )
+    })
+    const input = document.querySelector<HTMLInputElement>('[data-testid="image-file-input"]')!
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([blob], 'task065-068.png', { type: 'image/png' }))
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await expect(page).toHaveURL(/\/crop$/)
+  await page.getByTestId('crop-confirm').click()
+  await page.getByTestId('grid-width-preset-32').click()
+  await page.getByTestId('generate').click()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-grid-encoding', 'Uint16Array')
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const readState = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('#app') as HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: {
+              $pinia: {
+                _s: Map<
+                  string,
+                  {
+                    currentProject?: Project
+                    activePaletteIndex?: number | null
+                    recentPaletteIndexes?: number[]
+                    highlightedPaletteIndex?: number | null
+                    past?: unknown[]
+                    future?: unknown[]
+                  }
+                >
+              }
+            }
+          }
+        }
+      }
+      const stores = root.__vue_app__.config.globalProperties.$pinia._s
+      const project = stores.get('project')!.currentProject!
+      const editor = stores.get('editor')!
+      return {
+        projectId: project.projectId,
+        revision: project.revision,
+        updatedAt: project.updatedAt,
+        cells: Array.from(project.grid!.cells),
+        width: project.grid!.width,
+        height: project.grid!.height,
+        activePaletteIndex: editor.activePaletteIndex,
+        recentPaletteIndexes: editor.recentPaletteIndexes,
+        highlightedPaletteIndex: editor.highlightedPaletteIndex,
+        pastLength: stores.get('project')!.past!.length,
+        futureLength: stores.get('project')!.future!.length,
+      }
+    })
+
+  const firstState = await readState()
+  const sourcePaletteIndex = firstState.cells.find((value) => value !== 0)!
+  const sourceCount = firstState.cells.filter((value) => value === sourcePaletteIndex).length
+  const sourceEntry = MARD_291_PALETTE.entries.find(
+    (entry) => entry.paletteIndex === sourcePaletteIndex,
+  )!
+  const used = new Set(firstState.cells.filter((value) => value !== 0))
+  const replacementTarget = MARD_291_PALETTE.entries
+    .filter((entry) => !used.has(entry.paletteIndex))
+    .sort((left, right) => {
+      const leftDistance =
+        (left.rgb.r - sourceEntry.rgb.r) ** 2 +
+        (left.rgb.g - sourceEntry.rgb.g) ** 2 +
+        (left.rgb.b - sourceEntry.rgb.b) ** 2
+      const rightDistance =
+        (right.rgb.r - sourceEntry.rgb.r) ** 2 +
+        (right.rgb.g - sourceEntry.rgb.g) ** 2 +
+        (right.rgb.b - sourceEntry.rgb.b) ** 2
+      return rightDistance - leftDistance || left.paletteIndex - right.paletteIndex
+    })[0]!
+  const activeIndex = sourcePaletteIndex === 1 ? 2 : 1
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId(`picker-color-${activeIndex}`).click()
+  await page.getByTestId('picker-close').click()
+  const activeBefore = await readState()
+  expect(activeBefore.activePaletteIndex).toBe(activeIndex)
+
+  const sourceRow = page.getByTestId(`used-color-row-${sourcePaletteIndex}`)
+  await expect(sourceRow).toContainText(sourceEntry.displayCode)
+  await expect(sourceRow).toContainText(
+    `${((sourceCount / firstState.cells.filter((value) => value !== 0).length) * 100).toFixed(1)}%`,
+  )
+  await page.getByTestId('used-color-search').fill(sourceEntry.displayCode.toLowerCase())
+  await expect(page.getByTestId(`used-color-row-${sourcePaletteIndex}`)).toBeVisible()
+  await page.getByTestId('used-color-search').fill('not-a-used-color')
+  await expect(page.getByTestId('used-color-no-results')).toBeVisible()
+  expect((await readState()).highlightedPaletteIndex).toBeNull()
+  await page.getByTestId('used-color-search').fill('')
+
+  const sourceHighlight = page.getByTestId(`used-color-highlight-${sourcePaletteIndex}`)
+  await sourceHighlight.click()
+  const canvasArea = page.getByTestId('editor-canvas-area')
+  const miniMapCanvas = page.getByTestId('editor-minimap-canvas')
+  await expect(canvasArea).toHaveAttribute(
+    'data-highlighted-palette-index',
+    String(sourcePaletteIndex),
+  )
+  await expect(miniMapCanvas).toHaveAttribute(
+    'data-highlighted-palette-index',
+    String(sourcePaletteIndex),
+  )
+  await expect(canvasArea).toHaveAttribute('data-highlighted-beads', String(sourceCount))
+  await expect(miniMapCanvas).toHaveAttribute('data-highlighted-beads', String(sourceCount))
+  const mapFrameStyleBefore = await page
+    .getByTestId('editor-minimap-viewport')
+    .getAttribute('style')
+
+  const miniMapPixelAt = (row: number, column: number) =>
+    page.evaluate(
+      ({ row, column }) => {
+        const canvas = document.querySelector(
+          '[data-testid="editor-minimap-canvas"]',
+        ) as HTMLCanvasElement
+        const rect = canvas.getBoundingClientRect()
+        const grid = document.querySelector('[data-testid="editor-grid"]')!
+        const width = Number(grid.getAttribute('data-width'))
+        const height = Number(grid.getAttribute('data-height'))
+        const cell = 24
+        const scale = Math.min(rect.width / (width * cell), rect.height / (height * cell))
+        const artworkLeft = (rect.width - width * cell * scale) / 2
+        const artworkTop = (rect.height - height * cell * scale) / 2
+        const cssX = artworkLeft + (column + 0.5) * cell * scale
+        const cssY = artworkTop + (row + 0.5) * cell * scale
+        const context = canvas.getContext('2d')!
+        const x = Math.min(canvas.width - 1, Math.floor((cssX * canvas.width) / rect.width))
+        const y = Math.min(canvas.height - 1, Math.floor((cssY * canvas.height) / rect.height))
+        return Array.from(context.getImageData(x, y, 1, 1).data).slice(0, 3)
+      },
+      { row, column },
+    )
+
+  const canvasPixelAt = (row: number, column: number) =>
+    page.evaluate(
+      ({ row, column }) => {
+        const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+        const canvas = document.querySelector('[data-testid="editor-canvas"]') as HTMLCanvasElement
+        const zoom = Number(area.getAttribute('data-zoom'))
+        const panX = Number(area.getAttribute('data-pan-x'))
+        const panY = Number(area.getAttribute('data-pan-y'))
+        const rect = canvas.getBoundingClientRect()
+        const screenX = (24 + (column + 0.5) * 24) * zoom + panX
+        const screenY = (24 + (row + 0.5) * 24) * zoom + panY
+        const x = Math.floor((screenX * canvas.width) / rect.width)
+        const y = Math.floor((screenY * canvas.height) / rect.height)
+        return Array.from(canvas.getContext('2d')!.getImageData(x, y, 1, 1).data).slice(0, 3)
+      },
+      { row, column },
+    )
+
+  const selectedCellIndex = firstState.cells.findIndex((value) => value === sourcePaletteIndex)
+  const sampleRow = Math.floor(selectedCellIndex / firstState.width)
+  const sampleColumn = selectedCellIndex % firstState.width
+  const miniMapPixelBeforePreview = await miniMapPixelAt(sampleRow, sampleColumn)
+  const mainPixelBeforePreview = await canvasPixelAt(sampleRow, sampleColumn)
+
+  const compareButton = page.getByTestId('editor-source-compare')
+  const compareBox = await compareButton.boundingBox()
+  if (!compareBox) throw new Error('expected source compare button')
+  await page.mouse.move(compareBox.x + compareBox.width / 2, compareBox.y + compareBox.height / 2)
+  await page.mouse.down()
+  await expect(canvasArea).toHaveAttribute('data-comparing-source', 'true')
+  await expect(miniMapCanvas).toHaveAttribute('data-highlighted-beads', String(sourceCount))
+  await expect
+    .poll(async () => Number(await canvasArea.getAttribute('data-highlighted-beads')))
+    .toBe(0)
+  await page.mouse.up()
+  await expect(canvasArea).toHaveAttribute('data-comparing-source', 'false')
+
+  const beforeNoop = await readState()
+  await page.getByTestId(`used-color-replace-${sourcePaletteIndex}`).click()
+  await page.getByTestId('replacement-panel').getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId(`picker-color-${sourcePaletteIndex}`).click()
+  await expect(page.getByTestId('replacement-preview')).toContainText('无需替换')
+  await expect(page.getByTestId('replacement-confirm')).toBeDisabled()
+  await page.getByTestId('replacement-cancel').click()
+  expect(await readState()).toMatchObject({
+    revision: beforeNoop.revision,
+    cells: beforeNoop.cells,
+    pastLength: beforeNoop.pastLength,
+    futureLength: beforeNoop.futureLength,
+  })
+
+  const beforePreview = await readState()
+  await page.getByTestId(`used-color-replace-${sourcePaletteIndex}`).click()
+  await page.getByTestId('replacement-panel').getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId(`picker-color-${replacementTarget.paletteIndex}`).click()
+  await expect(page.getByTestId('replacement-preview')).toContainText(`${sourceCount} 颗拼豆`)
+  const previewState = await readState()
+  expect(previewState).toMatchObject({
+    projectId: beforePreview.projectId,
+    revision: beforePreview.revision,
+    updatedAt: beforePreview.updatedAt,
+    cells: beforePreview.cells,
+    activePaletteIndex: activeIndex,
+    highlightedPaletteIndex: sourcePaletteIndex,
+  })
+  expect(previewState.recentPaletteIndexes?.[0]).toBe(replacementTarget.paletteIndex)
+  await expect(canvasArea).toHaveAttribute(
+    'data-replacement-preview',
+    `${sourcePaletteIndex}:${replacementTarget.paletteIndex}`,
+  )
+  await expect(canvasArea).toHaveAttribute('data-replacement-beads', String(sourceCount))
+  const miniMapPixelDuringPreview = await miniMapPixelAt(sampleRow, sampleColumn)
+  const mainPixelDuringPreview = await canvasPixelAt(sampleRow, sampleColumn)
+  expect(miniMapPixelDuringPreview).toEqual(miniMapPixelBeforePreview)
+  expect(mainPixelDuringPreview).not.toEqual(mainPixelBeforePreview)
+  expect(await page.getByTestId('editor-minimap-viewport').getAttribute('style')).toBe(
+    mapFrameStyleBefore,
+  )
+
+  await page.getByTestId('replacement-confirm').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  const replaced = await readState()
+  expect(replaced.cells.filter((value) => value === sourcePaletteIndex)).toHaveLength(0)
+  expect(replaced.cells.filter((value) => value === replacementTarget.paletteIndex)).toHaveLength(
+    sourceCount,
+  )
+  expect(replaced.pastLength).toBe(beforePreview.pastLength + 1)
+  expect(replaced.activePaletteIndex).toBe(activeIndex)
+  expect(replaced.highlightedPaletteIndex).toBe(sourcePaletteIndex)
+  await expect(canvasArea).toHaveAttribute(
+    'data-highlighted-palette-index',
+    String(sourcePaletteIndex),
+  )
+
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  expect((await readState()).cells).toEqual(beforePreview.cells)
+  await page.getByTestId('editor-redo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  expect((await readState()).cells).toEqual(replaced.cells)
   expect(errors).toEqual([])
 })
 

@@ -6,10 +6,22 @@ import { renderBeadGrid } from '../../src/rendering/bead-canvas-renderer'
 function createContext() {
   const canvas = { width: 600, height: 600 } as HTMLCanvasElement
   const labels: Array<{ text: string; x: number; y: number }> = []
+  const alphaStack: number[] = []
+  let globalAlpha = 1
   const context = {
     canvas,
     setTransform: vi.fn(),
     clearRect: vi.fn(),
+    save: vi.fn(() => alphaStack.push(globalAlpha)),
+    restore: vi.fn(() => {
+      globalAlpha = alphaStack.pop() ?? 1
+    }),
+    get globalAlpha() {
+      return globalAlpha
+    },
+    set globalAlpha(value: number) {
+      globalAlpha = value
+    },
     fillRect: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
