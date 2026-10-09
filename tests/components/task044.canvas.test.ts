@@ -48,7 +48,9 @@ describe('TASK-044 Canvas component', () => {
     const fillsBeforeUpdate = context.context.fillRect.mock.calls.length
 
     layout.setSize(400, 300)
-    observers[0]!.trigger()
+    observers
+      .find((observer) => observer.target?.getAttribute('data-testid') === 'editor-canvas-area')!
+      .trigger()
     await flushPromises()
     frames.flush()
     await flushPromises()

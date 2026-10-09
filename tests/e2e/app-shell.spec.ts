@@ -684,6 +684,192 @@ test('TASK-048–050 labels, hit testing, pan priority, and source compare use t
   expect(errors).toEqual([])
 })
 
+test('TASK-062–064 real Worker edit Undo/Redo and MiniMap navigation stay on one Grid', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  const errors: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  page.on('pageerror', (error) => errors.push(error.message))
+
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const sourceCanvas = document.createElement('canvas')
+    sourceCanvas.width = 20
+    sourceCanvas.height = 15
+    const context = sourceCanvas.getContext('2d')!
+    context.fillStyle = '#e80bf2'
+    context.fillRect(0, 0, sourceCanvas.width, sourceCanvas.height)
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      sourceCanvas.toBlob((value) =>
+        value ? resolve(value) : reject(new Error('PNG encoding failed')),
+      )
+    })
+    const input = document.querySelector<HTMLInputElement>('[data-testid="image-file-input"]')!
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([blob], 'task062-064.png', { type: 'image/png' }))
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await expect(page).toHaveURL(/\/crop$/)
+  await page.getByTestId('crop-confirm').click()
+  await page.getByTestId('grid-width-preset-32').click()
+  await page.getByTestId('generate').click()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-grid-encoding', 'Uint16Array')
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const readState = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('#app') as HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: {
+              $pinia: {
+                _s: Map<
+                  string,
+                  { currentProject?: Project; zoom?: number; panX?: number; panY?: number }
+                >
+              }
+            }
+          }
+        }
+      }
+      const stores = root.__vue_app__.config.globalProperties.$pinia._s
+      const project = stores.get('project')!.currentProject!
+      const editor = stores.get('editor')!
+      return {
+        projectId: project.projectId,
+        revision: project.revision,
+        updatedAt: project.updatedAt,
+        cells: Array.from(project.grid!.cells),
+        width: project.grid!.width,
+        height: project.grid!.height,
+        zoom: editor.zoom,
+        panX: editor.panX,
+        panY: editor.panY,
+        selectedCell: editor.selectedCell,
+      }
+    })
+  const clickCell = async (row: number, column: number) => {
+    const viewport = await page.evaluate(() => {
+      const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+      return {
+        zoom: Number(area.getAttribute('data-zoom')),
+        panX: Number(area.getAttribute('data-pan-x')),
+        panY: Number(area.getAttribute('data-pan-y')),
+      }
+    })
+    const point = worldToScreen(
+      {
+        x: GRID_AXIS_MARGIN + (column + 0.5) * CELL_SIZE,
+        y: GRID_AXIS_MARGIN + (row + 0.5) * CELL_SIZE,
+      },
+      viewport,
+    )
+    const box = await page.getByTestId('editor-canvas').boundingBox()
+    if (!box) throw new Error('expected main Canvas bounds')
+    await page.mouse.click(box.x + point.x, box.y + point.y)
+  }
+
+  const initial = await readState()
+  const firstCellBefore = initial.cells[0]!
+  const firstColor = firstCellBefore === 1 ? 2 : 1
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId(`picker-color-${firstColor}`).click()
+  await page.getByTestId('picker-close').click()
+  await clickCell(0, 0)
+  await page.getByTestId('apply-current-color').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  let edited = await readState()
+  expect(edited.cells[0]).toBe(firstColor)
+  expect(edited.projectId).toBe(initial.projectId)
+
+  await page.waitForTimeout(5)
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  await expect(page.getByTestId('editor-redo')).toBeEnabled()
+  const undone = await readState()
+  expect(undone.cells).toEqual(initial.cells)
+  expect(undone.updatedAt).not.toBe(edited.updatedAt)
+  await expect(page.getByTestId('editor-minimap-canvas')).toHaveAttribute(
+    'data-rendered-beads',
+    String(initial.cells.filter((value) => value !== 0).length),
+  )
+
+  await page.getByTestId('editor-redo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  edited = await readState()
+  expect(edited.cells[0]).toBe(firstColor)
+
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  const branchColor = initial.cells[1] === 3 ? 4 : 3
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId(`picker-color-${branchColor}`).click()
+  await page.getByTestId('picker-close').click()
+  await clickCell(0, 1)
+  await page.getByTestId('apply-current-color').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  await expect(page.getByTestId('editor-redo')).toBeDisabled()
+  const branched = await readState()
+  expect(branched.cells[1]).toBe(branchColor)
+
+  await page.keyboard.press('Control+z')
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  await page.keyboard.press('Control+y')
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  const branch = await readState()
+
+  await page.getByTestId('viewport-zoom-in').click()
+  await page.getByTestId('viewport-zoom-in').click()
+  const miniMapCanvas = page.getByTestId('editor-minimap-canvas')
+  const miniMapBox = await miniMapCanvas.boundingBox()
+  if (!miniMapBox) throw new Error('expected MiniMap Canvas bounds')
+  const beforeJump = await readState()
+  await page.mouse.click(
+    miniMapBox.x + miniMapBox.width * 0.08,
+    miniMapBox.y + miniMapBox.height * 0.03,
+  )
+  await expect.poll(async () => (await readState()).panX).not.toBe(beforeJump.panX)
+  const afterJump = await readState()
+  expect(afterJump.zoom).toBe(beforeJump.zoom)
+  expect(afterJump.projectId).toBe(branch.projectId)
+  expect(afterJump.revision).toBe(branch.revision)
+  expect(afterJump.updatedAt).toBe(branch.updatedAt)
+  expect(afterJump.cells).toEqual(branch.cells)
+  expect(afterJump.selectedCell).toEqual(branch.selectedCell)
+
+  const viewportFrame = page.getByTestId('editor-minimap-viewport')
+  const frameBox = await viewportFrame.boundingBox()
+  if (!frameBox) throw new Error('expected MiniMap viewport frame')
+  const beforeDrag = await readState()
+  await page.mouse.move(frameBox.x + frameBox.width / 2, frameBox.y + frameBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(frameBox.x + frameBox.width / 2 + 12, frameBox.y + frameBox.height / 2 + 8)
+  await page.mouse.up()
+  await expect.poll(async () => (await readState()).panX).not.toBe(beforeDrag.panX)
+  const afterDrag = await readState()
+  expect(afterDrag.zoom).toBe(beforeDrag.zoom)
+  expect(afterDrag.projectId).toBe(branch.projectId)
+  expect(afterDrag.revision).toBe(branch.revision)
+  expect(afterDrag.updatedAt).toBe(branch.updatedAt)
+  expect(afterDrag.cells).toEqual(branch.cells)
+  expect(afterDrag.selectedCell).toEqual(branch.selectedCell)
+  await expect(page.getByTestId('editor-minimap-canvas')).toHaveAttribute(
+    'data-rendered-beads',
+    String(branch.cells.filter((value) => value !== 0).length),
+  )
+
+  await page.getByTestId('editor-minimap-toggle').click()
+  await expect(page.getByTestId('editor-minimap')).toHaveAttribute('data-collapsed', 'true')
+  await page.getByTestId('editor-minimap-toggle').click()
+  await expect(page.getByTestId('editor-minimap')).toHaveAttribute('data-collapsed', 'false')
+  expect(errors).toEqual([])
+})
+
 test('TASK-051–055 uses the shared color picker on the real Worker Project without editing its Grid', async ({
   page,
 }) => {

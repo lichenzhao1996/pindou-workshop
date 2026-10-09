@@ -87,6 +87,10 @@ export function installCanvasContext(mock: ReturnType<typeof createCanvasContext
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function () {
     if ((this as HTMLCanvasElement).dataset.testid !== 'editor-canvas') {
       return {
+        canvas: this,
+        setTransform: vi.fn(),
+        clearRect: vi.fn(),
+        fillRect: vi.fn(),
         drawImage: vi.fn(),
         getImageData(_x: number, _y: number, width: number, height: number) {
           return { data: new Uint8ClampedArray(width * height * 4) }

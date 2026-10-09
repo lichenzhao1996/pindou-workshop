@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
 import { useEditorStore } from '../../app/stores/editorStore'
@@ -45,6 +45,26 @@ const router = useRouter()
 const project = computed(() => store.currentProject)
 const canvasSize = shallowRef<CanvasSize>({ width: 0, height: 0 })
 
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
+  )
+}
+
+function handleHistoryShortcut(event: KeyboardEvent) {
+  if (isTextEntryTarget(event.target) || !(event.ctrlKey || event.metaKey)) return
+  const key = event.key.toLowerCase()
+  if (key === 'z') {
+    event.preventDefault()
+    if (event.shiftKey) store.redo()
+    else store.undo()
+  } else if (key === 'y' && !event.shiftKey) {
+    event.preventDefault()
+    store.redo()
+  }
+}
+
 function selectPaletteIndex(paletteIndex: number) {
   editor.selectPaletteIndex(paletteIndex)
 }
@@ -58,6 +78,9 @@ watch(
   },
   { immediate: true },
 )
+
+onMounted(() => window.addEventListener('keydown', handleHistoryShortcut))
+onBeforeUnmount(() => window.removeEventListener('keydown', handleHistoryShortcut))
 </script>
 
 <style scoped>

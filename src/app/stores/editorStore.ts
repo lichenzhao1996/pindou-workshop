@@ -30,6 +30,8 @@ export const useEditorStore = defineStore('editor', () => {
   const recentPaletteIndexes = ref<number[]>([])
   const showLabels = ref(false)
   const selectedCell = ref<SelectedCell | null>(null)
+  const historyRestoreVersion = ref(0)
+  const minimapCollapsed = ref(false)
   const isComparingSource = ref(false)
   const zoom = ref(1)
   const panX = ref(0)
@@ -74,6 +76,14 @@ export const useEditorStore = defineStore('editor', () => {
 
   function setSelectedCell(cell: SelectedCell | null) {
     selectedCell.value = cell ? { row: cell.row, column: cell.column, index: cell.index } : null
+  }
+
+  function markHistoryRestore() {
+    historyRestoreVersion.value += 1
+  }
+
+  function toggleMiniMap() {
+    minimapCollapsed.value = !minimapCollapsed.value
   }
 
   function setSourceCompareActive(active: boolean) {
@@ -138,6 +148,8 @@ export const useEditorStore = defineStore('editor', () => {
     recentPaletteIndexes,
     showLabels,
     selectedCell,
+    historyRestoreVersion,
+    minimapCollapsed,
     isComparingSource,
     zoom,
     panX,
@@ -149,6 +161,8 @@ export const useEditorStore = defineStore('editor', () => {
     selectPaletteIndex,
     toggleLabels,
     setSelectedCell,
+    markHistoryRestore,
+    toggleMiniMap,
     setSourceCompareActive,
     setViewport,
     setZoom,

@@ -25,6 +25,24 @@
           </select>
         </label>
       </div>
+      <div class="history-actions" role="group" aria-label="撤销与重做">
+        <button
+          type="button"
+          data-testid="editor-undo"
+          :disabled="!projectStore.canUndo"
+          @click="projectStore.undo()"
+        >
+          撤销
+        </button>
+        <button
+          type="button"
+          data-testid="editor-redo"
+          :disabled="!projectStore.canRedo"
+          @click="projectStore.redo()"
+        >
+          重做
+        </button>
+      </div>
       <button
         ref="compareButton"
         type="button"
@@ -94,12 +112,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEditorStore } from '../../../app/stores/editorStore'
+import { useProjectStore } from '../../../app/stores/projectStore'
 import type { EditorTool, FillTargetMode } from '../../../app/stores/editorStore'
 import type { Grid } from '../../../domain/project/grid'
 import { MAX_ZOOM, MIN_ZOOM, type CanvasSize } from '../../../rendering/viewport'
 
 const props = defineProps<{ grid: Grid | null; canvasSize: CanvasSize }>()
 const editor = useEditorStore()
+const projectStore = useProjectStore()
 const tools: Array<{ value: EditorTool; label: string }> = [
   { value: 'select', label: '选择' },
   { value: 'brush', label: '画笔' },
@@ -239,6 +259,13 @@ onBeforeUnmount(() => {
 .tool-actions {
   display: flex;
   flex-wrap: wrap;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+  border-right: var(--border-width) solid var(--color-border);
+}
+
+.history-actions {
+  display: flex;
   gap: var(--space-1);
   padding-right: var(--space-2);
   border-right: var(--border-width) solid var(--color-border);

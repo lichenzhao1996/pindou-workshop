@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
+import { useEditorStore } from './editorStore'
 import {
   commitGenerationResultToProject,
   createGenerationRequest,
@@ -18,6 +19,19 @@ import type { Project } from '../../domain/project'
 import { applyGridOperation as applyProjectGridOperation } from '../../domain/project/operations'
 import type { GridOperation } from '../../domain/project/operations'
 import type { Grid } from '../../domain/project/grid'
+import {
+  createGridHistoryEntry,
+  MAX_GRID_HISTORY_ENTRIES,
+  restoreGridHistorySnapshot,
+  type GridHistoryEntry,
+} from '../../domain/project/history'
+
+interface HistoryLineage {
+  projectId: string
+  grid: Grid
+  revision: number
+  basisProject: Project
+}
 
 export type GenerationStatus = 'idle' | 'generating' | 'success' | 'error'
 
@@ -31,6 +45,9 @@ export type GenerationStatus = 'idle' | 'generating' | 'success' | 'error'
  */
 export const useProjectStore = defineStore('project', () => {
   const currentProject = shallowRef<Project | null>(null)
+  const past = shallowRef<GridHistoryEntry[]>([])
+  const future = shallowRef<GridHistoryEntry[]>([])
+  let historyLineage: HistoryLineage | null = null
   const generationStatus = ref<GenerationStatus>('idle')
   const generationError = ref<string | null>(null)
   const pendingGenerationRequest = shallowRef<ProjectGenerationRequest | null>(null)
@@ -39,6 +56,73 @@ export const useProjectStore = defineStore('project', () => {
   let requestProject: Project | null = null
   let activeRequest: ProjectGenerationRequest | null = null
   let workerClient: GenerationWorkerClient | null = null
+
+  function sameCrop(left: Project['crop'], right: Project['crop']): boolean {
+    return (
+      left.x === right.x &&
+      left.y === right.y &&
+      left.width === right.width &&
+      left.height === right.height &&
+      left.rotation === right.rotation &&
+      left.aspectRatio === right.aspectRatio
+    )
+  }
+
+  function sameGeneration(left: Project['generation'], right: Project['generation']): boolean {
+    return (
+      left.widthBeads === right.widthBeads &&
+      left.heightBeads === right.heightBeads &&
+      left.beadSizeMm === right.beadSizeMm &&
+      left.mode === right.mode &&
+      left.paletteVersion === right.paletteVersion &&
+      left.algorithmVersion === right.algorithmVersion
+    )
+  }
+
+  function sameSource(left: Project['source'], right: Project['source']): boolean {
+    return (
+      left.originalImage === right.originalImage &&
+      left.originalFileName === right.originalFileName &&
+      left.mimeType === right.mimeType &&
+      left.originalWidth === right.originalWidth &&
+      left.originalHeight === right.originalHeight
+    )
+  }
+
+  function compatibleGridLineage(left: Project | null, right: Project | null): boolean {
+    return Boolean(
+      left &&
+      right &&
+      left.projectId === right.projectId &&
+      left.grid !== null &&
+      left.grid === right.grid &&
+      left.revision === right.revision &&
+      sameSource(left.source, right.source) &&
+      sameCrop(left.crop, right.crop) &&
+      sameGeneration(left.generation, right.generation),
+    )
+  }
+
+  function historyMatchesCurrent(): boolean {
+    const project = currentProject.value
+    return Boolean(
+      project &&
+      historyLineage &&
+      project.projectId === historyLineage.projectId &&
+      project.grid === historyLineage.grid &&
+      project.revision === historyLineage.revision &&
+      compatibleGridLineage(historyLineage.basisProject, project),
+    )
+  }
+
+  function clearHistory() {
+    past.value = []
+    future.value = []
+    historyLineage = null
+  }
+
+  const canUndo = computed(() => past.value.length > 0 && historyMatchesCurrent())
+  const canRedo = computed(() => future.value.length > 0 && historyMatchesCurrent())
 
   function clearGenerationRequest() {
     pendingGenerationRequest.value = null
@@ -52,6 +136,7 @@ export const useProjectStore = defineStore('project', () => {
       return
     }
 
+    if (!compatibleGridLineage(currentProject.value, project)) clearHistory()
     workerClient?.cancel()
     currentProject.value = project
     generationStatus.value = 'idle'
@@ -83,9 +168,84 @@ export const useProjectStore = defineStore('project', () => {
       return false
     }
 
-    const result = applyProjectGridOperation(project, operation, now)
+    if ((past.value.length > 0 || future.value.length > 0) && !historyMatchesCurrent()) {
+      clearHistory()
+    }
+    const committedAt = now ?? new Date()
+    const result = applyProjectGridOperation(project, operation, committedAt)
     if (!result.changed) return false
+    const entry = createGridHistoryEntry(project, result.project, operation, committedAt)
     currentProject.value = result.project
+    past.value = [...past.value, entry].slice(-MAX_GRID_HISTORY_ENTRIES)
+    future.value = []
+    historyLineage = {
+      projectId: result.project.projectId,
+      grid: result.project.grid!,
+      revision: result.project.revision,
+      basisProject: result.project,
+    }
+    return true
+  }
+
+  function undo(now: Date = new Date()): boolean {
+    if (past.value.length === 0) return false
+    const project = currentProject.value
+    if (!project || !historyMatchesCurrent()) {
+      clearHistory()
+      return false
+    }
+    const entry = past.value[past.value.length - 1]!
+    if (
+      entry.projectId !== project.projectId ||
+      entry.afterProject.revision !== project.revision ||
+      !project.grid
+    ) {
+      clearHistory()
+      return false
+    }
+
+    const restored = restoreGridHistorySnapshot(project, entry.beforeProject, now)
+    currentProject.value = restored
+    past.value = past.value.slice(0, -1)
+    future.value = [...future.value, entry].slice(-MAX_GRID_HISTORY_ENTRIES)
+    historyLineage = {
+      projectId: restored.projectId,
+      grid: restored.grid!,
+      revision: restored.revision,
+      basisProject: restored,
+    }
+    useEditorStore().markHistoryRestore()
+    return true
+  }
+
+  function redo(now: Date = new Date()): boolean {
+    if (future.value.length === 0) return false
+    const project = currentProject.value
+    if (!project || !historyMatchesCurrent()) {
+      clearHistory()
+      return false
+    }
+    const entry = future.value[future.value.length - 1]!
+    if (
+      entry.projectId !== project.projectId ||
+      entry.beforeProject.revision !== project.revision ||
+      !project.grid
+    ) {
+      clearHistory()
+      return false
+    }
+
+    const restored = restoreGridHistorySnapshot(project, entry.afterProject, now)
+    currentProject.value = restored
+    future.value = future.value.slice(0, -1)
+    past.value = [...past.value, entry].slice(-MAX_GRID_HISTORY_ENTRIES)
+    historyLineage = {
+      projectId: restored.projectId,
+      grid: restored.grid!,
+      revision: restored.revision,
+      basisProject: restored,
+    }
+    useEditorStore().markHistoryRestore()
     return true
   }
 
@@ -163,6 +323,7 @@ export const useProjectStore = defineStore('project', () => {
         result,
         now,
       )
+      clearHistory()
       generationStatus.value = 'success'
       generationError.value = null
       clearGenerationRequest()
@@ -241,12 +402,19 @@ export const useProjectStore = defineStore('project', () => {
 
   return {
     currentProject,
+    past,
+    future,
+    canUndo,
+    canRedo,
     generationStatus,
     generationError,
     pendingGenerationRequest,
     setCurrentProject,
     clearCurrentProject,
     applyGridOperation,
+    undo,
+    redo,
+    clearHistory,
     prepareGenerationRequest,
     beginGeneration,
     isCurrentGenerationRequest,

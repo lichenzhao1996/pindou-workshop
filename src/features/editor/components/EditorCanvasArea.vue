@@ -31,6 +31,7 @@
       aria-label="拼豆网格画布"
       tabindex="0"
     />
+    <EditorMiniMap :grid="grid" :project-id="projectId" :canvas-size="canvasSize" />
     <p v-if="!grid" class="canvas-empty" data-testid="canvas-empty">暂无 Grid</p>
   </section>
 </template>
@@ -52,6 +53,7 @@ import {
 import { hitTestGridCell, type GridCellHit } from '../../../rendering/hit-test'
 import { getGridStrokeSegment } from '../../../rendering/grid-stroke'
 import { SourcePreviewCache } from '../../../rendering/source-preview'
+import EditorMiniMap from './EditorMiniMap.vue'
 import {
   getCanvasBackingSize,
   MAX_ZOOM,
@@ -651,6 +653,15 @@ watch(
     scheduleDraw()
   },
   { flush: 'post' },
+)
+watch(
+  () => editor.historyRestoreVersion,
+  () => {
+    hoveredCell.value = null
+    previewCell.value = null
+    clearInvalidInteractionCells()
+    scheduleDraw()
+  },
 )
 watch(
   () => [props.project, props.projectId, props.grid, projectStore.currentProject],

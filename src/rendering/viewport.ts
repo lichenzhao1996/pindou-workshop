@@ -1,6 +1,7 @@
 import type { Grid } from '../domain/project/grid'
+import { CELL_SIZE } from './cell-size'
 
-export const CELL_SIZE = 24
+export { CELL_SIZE } from './cell-size'
 export const GRID_AXIS_MARGIN = CELL_SIZE
 export const MIN_ZOOM = 0.1
 export const MAX_ZOOM = 8
