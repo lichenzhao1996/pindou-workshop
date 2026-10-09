@@ -16,6 +16,7 @@ import {
   type GenerationWorkerClient,
 } from '../../domain/generation/worker-client'
 import type { Project } from '../../domain/project'
+import { renameProject as renameProjectDomain } from '../../domain/project/name'
 import { applyGridOperation as applyProjectGridOperation } from '../../domain/project/operations'
 import type { GridOperation } from '../../domain/project/operations'
 import type { Grid } from '../../domain/project/grid'
@@ -150,6 +151,25 @@ export const useProjectStore = defineStore('project', () => {
 
   function clearCurrentProject() {
     setCurrentProject(null)
+  }
+
+  /** Updates only current Project metadata and keeps Grid history/generation intact. */
+  function renameProject(
+    name: string,
+    expectedProjectId?: string,
+    now: Date = new Date(),
+  ): boolean {
+    const project = currentProject.value
+    if (!project || (expectedProjectId && project.projectId !== expectedProjectId)) return false
+
+    const renamed = renameProjectDomain(project, name, now)
+    if (renamed === project || currentProject.value !== project) return false
+
+    currentProject.value = renamed
+    // The request's formal generation inputs are unchanged; keep its live Project token aligned
+    // so a successful in-flight Worker commit includes the latest metadata.
+    if (requestProject === project) requestProject = renamed
+    return true
   }
 
   /**
@@ -416,6 +436,7 @@ export const useProjectStore = defineStore('project', () => {
     pendingGenerationRequest,
     setCurrentProject,
     clearCurrentProject,
+    renameProject,
     applyGridOperation,
     undo,
     redo,

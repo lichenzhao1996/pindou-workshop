@@ -1508,3 +1508,209 @@ test('TASK-056–061 applies, paints, erases, eyedrops and fills the real Worker
   expect(afterCompare.projectId).toBe(beforeSingle.projectId)
   expect(errors).toEqual([])
 })
+
+test('TASK-069 renames the real Worker Project without breaking Grid history', async ({ page }) => {
+  const workers: string[] = []
+  page.on('worker', (worker) => workers.push(worker.url()))
+  await uploadGenerationFixture(page)
+
+  const readState = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('#app') as HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: {
+              $pinia: {
+                _s: Map<
+                  string,
+                  {
+                    currentProject: Project | null
+                    past: unknown[]
+                    future: unknown[]
+                    canUndo: boolean
+                    canRedo: boolean
+                  }
+                >
+              }
+            }
+          }
+        }
+      }
+      const stores = root.__vue_app__.config.globalProperties.$pinia._s
+      const projectStore = stores.get('project')!
+      const editor = stores.get('editor')!
+      const project = projectStore.currentProject!
+      return {
+        projectName: project.projectName,
+        projectId: project.projectId,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        revision: project.revision,
+        cells: Array.from(project.grid!.cells),
+        activeTool: editor.activeTool,
+        activePaletteIndex: editor.activePaletteIndex,
+        selectedCell: editor.selectedCell,
+        highlightedPaletteIndex: editor.highlightedPaletteIndex,
+        showLabels: editor.showLabels,
+        zoom: editor.zoom,
+        panX: editor.panX,
+        panY: editor.panY,
+        pastLength: projectStore.past.length,
+        futureLength: projectStore.future.length,
+        canUndo: projectStore.canUndo,
+        canRedo: projectStore.canRedo,
+      }
+    })
+
+  const initialName = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    return root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+      .projectName
+  })
+  expect(initialName).toBe('task037-local')
+
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const generated = await assertCommittedGrid(page, 32, 24, generationStartedAt)
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+  expect(generated.projectId).toBeTruthy()
+
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId('picker-search').fill('A26')
+  await page.getByTestId('picker-color-26').click()
+  await page.getByTestId('picker-close').click()
+  await page.getByTestId('viewport-reset').click()
+  await page.getByTestId('viewport-center').click()
+
+  const canvasBox = await page.getByTestId('editor-canvas').boundingBox()
+  if (!canvasBox) throw new Error('expected Editor Canvas bounds')
+  const viewport = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const firstCell = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE / 2, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    viewport,
+  )
+  await page.mouse.click(canvasBox.x + firstCell.x, canvasBox.y + firstCell.y)
+  await expect(page.getByTestId('editor-selected-cell')).toContainText('第 1 行、第 1 列')
+  const beforeEdit = await readState()
+  await page.getByTestId('apply-current-color').click()
+  const edited = await readState()
+  expect(edited.cells[0]).toBe(26)
+  expect(edited.revision).toBe(beforeEdit.revision + 1)
+  expect(edited.pastLength).toBe(beforeEdit.pastLength + 1)
+
+  await page.getByTestId('used-color-highlight-26').click()
+  await page.getByTestId('editor-label-toggle').click()
+  await page.getByTestId('editor-tool-brush').click()
+  const beforeCancel = await readState()
+  await page.getByTestId('project-name-rename').click()
+  await page.getByTestId('project-name-input').fill('取消的名字')
+  await page.getByTestId('project-name-cancel').click()
+  const afterCancel = await readState()
+  expect(afterCancel.projectName).toBe('task037-local')
+  expect(afterCancel.updatedAt).toBe(beforeCancel.updatedAt)
+  expect(afterCancel.revision).toBe(beforeCancel.revision)
+  expect(afterCancel.cells).toEqual(beforeCancel.cells)
+
+  await page.getByTestId('project-name-rename').click()
+  const nameInput = page.getByTestId('project-name-input')
+  await nameInput.fill('  我的作品  ')
+  const draft = await readState()
+  expect(draft.projectName).toBe('task037-local')
+  expect(draft.updatedAt).toBe(beforeCancel.updatedAt)
+  await nameInput.press('Enter')
+  await expect(page.getByTestId('editor-project-name')).toHaveText('我的作品')
+  const renamed = await readState()
+  expect(renamed.projectId).toBe(generated.projectId)
+  expect(renamed.createdAt).toBe(generated.createdAt)
+  expect(renamed.revision).toBe(edited.revision)
+  expect(renamed.cells).toEqual(edited.cells)
+  expect(renamed.pastLength).toBe(edited.pastLength)
+  expect(renamed.futureLength).toBe(edited.futureLength)
+  expect(renamed).toMatchObject({
+    activeTool: 'brush',
+    activePaletteIndex: 26,
+    selectedCell: edited.selectedCell,
+    highlightedPaletteIndex: 26,
+    showLabels: true,
+    zoom: beforeCancel.zoom,
+    panX: beforeCancel.panX,
+    panY: beforeCancel.panY,
+  })
+
+  await page.getByTestId('editor-undo').click()
+  const undone = await readState()
+  expect(undone.projectName).toBe('我的作品')
+  expect(undone.cells).toEqual(beforeEdit.cells)
+  expect(undone.revision).toBe(beforeEdit.revision)
+  expect(undone.canRedo).toBe(true)
+
+  await page.getByTestId('editor-redo').click()
+  const redone = await readState()
+  expect(redone.projectName).toBe('我的作品')
+  expect(redone.cells).toEqual(edited.cells)
+  expect(redone.revision).toBe(edited.revision)
+  expect(redone.canUndo).toBe(true)
+
+  await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: { _s: Map<string, { currentProject: Project | null }> }
+          }
+        }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject!
+    ;(window as Window & { __task069Project?: Project }).__task069Project = project
+  })
+  const beforeSameName = await readState()
+  await page.getByTestId('project-name-rename').click()
+  const sameNameInput = page.getByTestId('project-name-input')
+  await sameNameInput.fill(' 我的作品 ')
+  await sameNameInput.press('Enter')
+  const sameName = await readState()
+  const sameProjectReference = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: { _s: Map<string, { currentProject: Project | null }> }
+          }
+        }
+      }
+    }
+    return (
+      (window as Window & { __task069Project?: Project }).__task069Project ===
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    )
+  })
+  expect(sameProjectReference).toBe(true)
+  expect(sameName.updatedAt).toBe(beforeSameName.updatedAt)
+  expect(sameName.revision).toBe(beforeSameName.revision)
+  expect(sameName.cells).toEqual(beforeSameName.cells)
+  expect(sameName.pastLength).toBe(beforeSameName.pastLength)
+  expect(sameName.futureLength).toBe(beforeSameName.futureLength)
+
+  await page.getByTestId('project-name-rename').click()
+  await page.getByTestId('project-name-input').fill('   ')
+  await page.getByTestId('project-name-confirm').click()
+  await expect(page.getByTestId('editor-project-name')).toHaveText('未命名作品')
+  const fallback = await readState()
+  expect(fallback.revision).toBe(sameName.revision)
+  expect(fallback.cells).toEqual(sameName.cells)
+})

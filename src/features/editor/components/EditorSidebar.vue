@@ -12,7 +12,37 @@
       :data-palette-indices="stats.usedPaletteIndices.join(',')"
       :data-revision="project.revision"
     >
-      <p>{{ project.projectName }}</p>
+      <div class="project-name-editor" data-testid="project-name-editor">
+        <form v-if="isRenaming" class="project-name-form" @submit.prevent="submitRename">
+          <label for="project-name-input">作品名称</label>
+          <input
+            id="project-name-input"
+            ref="projectNameInput"
+            v-model="draftProjectName"
+            data-testid="project-name-input"
+            type="text"
+            autocomplete="off"
+            @keydown.esc.prevent.stop="cancelRename"
+          />
+          <div class="project-name-actions">
+            <button type="submit" data-testid="project-name-confirm">确认</button>
+            <button type="button" data-testid="project-name-cancel" @click="cancelRename">
+              取消
+            </button>
+          </div>
+        </form>
+        <template v-else>
+          <p data-testid="editor-project-name">{{ project.projectName }}</p>
+          <button
+            ref="renameButton"
+            type="button"
+            data-testid="project-name-rename"
+            @click="beginRename"
+          >
+            重命名
+          </button>
+        </template>
+      </div>
       <p data-testid="editor-dimensions">{{ project.grid.width }} × {{ project.grid.height }} 颗</p>
       <p data-testid="editor-mode">{{ GENERATION_MODE_LABELS[project.generation.mode] }}</p>
       <p data-testid="editor-beads">
@@ -51,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { GENERATION_MODE_LABELS } from '../../../domain/generation/mode'
 import { useEditorStore } from '../../../app/stores/editorStore'
@@ -69,6 +99,11 @@ const stats = computed(() => (props.project?.grid ? deriveProjectStats(props.pro
 const editor = useEditorStore()
 const projectStore = useProjectStore()
 const replacementPreviewActive = ref(false)
+const isRenaming = ref(false)
+const draftProjectName = ref('')
+const draftProjectId = ref<string | null>(null)
+const projectNameInput = ref<HTMLInputElement | null>(null)
+const renameButton = ref<HTMLButtonElement | null>(null)
 const selectedCell = computed(() => editor.selectedCell)
 const activeColor = computed(() =>
   editor.activePaletteIndex === null
@@ -115,6 +150,52 @@ function handleReplacementPreview(preview: ReplacementPreview | null) {
   replacementPreviewActive.value = valid
   emit('replacement-preview', valid ? preview : null)
 }
+
+function beginRename() {
+  const project = props.project
+  if (!project) return
+  draftProjectName.value = project.projectName
+  draftProjectId.value = project.projectId
+  isRenaming.value = true
+  void nextTick(() => {
+    projectNameInput.value?.focus()
+    projectNameInput.value?.select()
+  })
+}
+
+function closeRename(restoreFocus = true) {
+  isRenaming.value = false
+  draftProjectName.value = props.project?.projectName ?? ''
+  draftProjectId.value = null
+  if (restoreFocus) void nextTick(() => renameButton.value?.focus())
+}
+
+function cancelRename() {
+  closeRename()
+}
+
+function submitRename() {
+  const expectedProjectId = draftProjectId.value
+  const current = projectStore.currentProject
+  if (
+    !expectedProjectId ||
+    props.project?.projectId !== expectedProjectId ||
+    current?.projectId !== expectedProjectId
+  ) {
+    closeRename(false)
+    return
+  }
+  projectStore.renameProject(draftProjectName.value, expectedProjectId)
+  closeRename()
+}
+
+watch(
+  () => props.project?.projectId,
+  (projectId, previousProjectId) => {
+    if (isRenaming.value && projectId !== previousProjectId) closeRename(false)
+  },
+  { flush: 'sync' },
+)
 
 function applyCurrentColor() {
   if (!canApplyCurrentColor.value || replacementPreviewActive.value) return
@@ -187,5 +268,43 @@ a {
 .single-cell-edit button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.project-name-editor {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.project-name-form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.project-name-form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-background);
+  color: var(--color-text-primary);
+}
+
+.project-name-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.project-name-actions button,
+.project-name-editor > button {
+  justify-self: start;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-action);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-background);
+  color: var(--color-action);
+  cursor: pointer;
 }
 </style>
