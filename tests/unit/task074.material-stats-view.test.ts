@@ -45,7 +45,19 @@ describe('TASK-074 material stats view', () => {
       [2, MARD_291_PALETTE.entries[1]!.displayCode, MARD_291_PALETTE.entries[1]!.name, 1],
       [white.paletteIndex, white.displayCode, white.name, 1],
     ])
-    expect(view.rows).toEqual(deriveUsedColorRowsFromStats(stats))
+    expect(
+      view.rows.map(({ paletteIndex, entry, count, percentage }) => ({
+        paletteIndex,
+        entry,
+        count,
+        percentage,
+      })),
+    ).toEqual(deriveUsedColorRowsFromStats(stats))
+    expect(view.rows.map(({ count, suggestedCount }) => [count, suggestedCount])).toEqual([
+      [2, 3],
+      [1, 2],
+      [1, 2],
+    ])
     expect(view.rows.some(({ paletteIndex }) => paletteIndex === 0)).toBe(false)
     expect(view.rows.find(({ paletteIndex }) => paletteIndex === white.paletteIndex)?.count).toBe(1)
   })
@@ -69,7 +81,7 @@ describe('TASK-074 material stats view', () => {
     ])
     expect(stats.usageByPaletteIndex).toEqual(originalUsage)
     expect(stats.usedPaletteIndices).toEqual(originalIndices)
-    expect(first.rows.every((row) => !('suggestedCount' in row))).toBe(true)
+    expect(first.rows.every((row) => row.suggestedCount >= row.count)).toBe(true)
     expect(first.rows.every((row) => !('wastePercent' in row))).toBe(true)
   })
 })

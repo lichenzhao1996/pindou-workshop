@@ -1,8 +1,12 @@
 import { deriveUsedColorRowsFromStats } from '../color-management'
 import type { UsedColorRow } from '../color-management'
+import { calculateSuggestedBeadCount } from '../../../domain/project/materials'
 import type { ProjectStats } from '../../../domain/project/stats'
 
-export type MaterialColorRow = Readonly<UsedColorRow>
+export interface MaterialColorRow extends Readonly<UsedColorRow> {
+  /** Suggested procurement quantity; `count` remains the actual Grid-derived quantity. */
+  readonly suggestedCount: number
+}
 
 export interface MaterialStatsView {
   readonly totalBeads: number
@@ -17,6 +21,9 @@ export function deriveMaterialStatsView(stats: ProjectStats | null): MaterialSta
   return {
     totalBeads: stats.totalBeads,
     usedColorCount: stats.usedColorCount,
-    rows: deriveUsedColorRowsFromStats(stats),
+    rows: deriveUsedColorRowsFromStats(stats).map((row): MaterialColorRow => ({
+      ...row,
+      suggestedCount: calculateSuggestedBeadCount(row.count),
+    })),
   }
 }

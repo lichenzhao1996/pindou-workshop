@@ -45,7 +45,8 @@
             <span class="used-color-name">{{ row.entry.name }}</span>
           </span>
           <span class="used-color-amount">
-            <span>{{ row.count }} 颗</span>
+            <span>实际：{{ row.count }} 颗</span>
+            <span>建议：{{ row.suggestedCount }} 颗</span>
             <span>{{ row.percentage.toFixed(1) }}%</span>
           </span>
         </button>

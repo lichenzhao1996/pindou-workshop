@@ -44,17 +44,20 @@ export function deriveUsedColorRowsFromStats(stats: ProjectStats | null): UsedCo
     .sort((left, right) => right.count - left.count || left.paletteIndex - right.paletteIndex)
 }
 
-export function filterUsedColorRows(rows: readonly UsedColorRow[], query: string): UsedColorRow[] {
+export function filterUsedColorRows<T extends UsedColorRow>(
+  rows: readonly T[],
+  query: string,
+): T[] {
   const entries = rows.map((row) => row.entry)
   const usedPalette = { ...MARD_291_PALETTE, entries }
   const matches = new Set(searchPalette(usedPalette, query).map((entry) => entry.paletteIndex))
   return rows.filter((row) => matches.has(row.paletteIndex))
 }
 
-export function sortUsedColorRows(
-  rows: readonly UsedColorRow[],
+export function sortUsedColorRows<T extends UsedColorRow>(
+  rows: readonly T[],
   order: UsedColorSort,
-): UsedColorRow[] {
+): T[] {
   if (order === 'count') {
     return [...rows].sort(
       (left, right) => right.count - left.count || left.paletteIndex - right.paletteIndex,
