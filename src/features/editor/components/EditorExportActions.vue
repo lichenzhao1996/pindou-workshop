@@ -20,10 +20,19 @@
       type="button"
       data-testid="export-pdf-base"
       :disabled="!project?.grid || isExporting"
-      @click="exportPdfBase"
+      @click="exportPdfOverview"
     >
-      {{ isExporting ? '正在生成 PDF…' : '导出 PDF 基础样例' }}
+      {{ isExporting ? '正在生成 PDF…' : '导出 PDF 总览页' }}
     </button>
+    <button
+      type="button"
+      data-testid="export-pdf-pagination-preview"
+      :disabled="!project?.grid || isExporting"
+      @click="exportPdfPaginationPreview"
+    >
+      {{ isExporting ? '正在生成 PDF…' : '导出 PDF 分页预览' }}
+    </button>
+    <PdfLayoutSummary />
     <p v-if="exportError" role="alert" data-testid="export-error">{{ exportError }}</p>
   </section>
 </template>
@@ -34,6 +43,7 @@ import type { Project } from '../../../domain/project/types'
 import { downloadEffectPreviewPng } from '../../export/png/effect-preview'
 import { downloadReferencePng } from '../../export/png/reference-guide'
 import { createExportSnapshot } from '../../export/snapshot'
+import PdfLayoutSummary from './PdfLayoutSummary.vue'
 
 const props = defineProps<{ project: Project | null }>()
 const isExporting = ref(false)
@@ -71,7 +81,7 @@ async function exportReferencePng() {
   }
 }
 
-async function exportPdfBase() {
+async function exportPdfOverview() {
   const project = props.project
   if (!project?.grid || isExporting.value) return
 
@@ -79,13 +89,33 @@ async function exportPdfBase() {
   exportError.value = ''
   try {
     const snapshot = createExportSnapshot(project)
-    const { downloadPdfFontSample } = await import('../../export/pdf/font-sample')
-    await downloadPdfFontSample(snapshot)
+    const { downloadPdfOverview } = await import('../../export/pdf/overview')
+    await downloadPdfOverview(snapshot)
   } catch (error) {
     exportError.value =
       error instanceof Error && error.name === 'PdfChineseFontError'
         ? error.message
         : 'PDF 基础样例生成失败，请稍后重试。'
+  } finally {
+    isExporting.value = false
+  }
+}
+
+async function exportPdfPaginationPreview() {
+  const project = props.project
+  if (!project?.grid || isExporting.value) return
+
+  isExporting.value = true
+  exportError.value = ''
+  try {
+    const snapshot = createExportSnapshot(project)
+    const { downloadPdfPaginationPreview } = await import('../../export/pdf/pagination-preview')
+    await downloadPdfPaginationPreview(snapshot)
+  } catch (error) {
+    exportError.value =
+      error instanceof Error && error.name === 'PdfChineseFontError'
+        ? error.message
+        : 'PDF 分页预览生成失败，请稍后重试。'
   } finally {
     isExporting.value = false
   }

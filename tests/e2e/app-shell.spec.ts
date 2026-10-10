@@ -3135,7 +3135,7 @@ test('TASK-079 downloads a production reference PNG from the real Worker Grid', 
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
 })
 
-test('TASK-081 embeds Chinese text in a downloadable PDF from the real Worker Project', async ({
+test('TASK-081/082 exports a real PDF overview with Chinese and formal ProjectStats', async ({
   page,
 }) => {
   await clearActiveSessionDatabase(page)
@@ -3161,17 +3161,96 @@ test('TASK-081 embeds Chinese text in a downloadable PDF from the real Worker Pr
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
   expect(pdf.numPages).toBe(1)
-  const pageText = await pdf.getPage(1).then((pdfPage) => pdfPage.getTextContent())
+  const pdfOverviewPage = await pdf.getPage(1)
+  const overviewViewport = pdfOverviewPage.getViewport({ scale: 1 })
+  expect(overviewViewport.width).toBeCloseTo(595.28, 0)
+  expect(overviewViewport.height).toBeCloseTo(841.89, 0)
+  const pageText = await pdfOverviewPage.getTextContent()
   const extractedText = pageText.items
     .filter((item) => 'str' in item)
     .map((item) => ('str' in item ? item.str : ''))
     .join(' ')
-  expect(extractedText).toContain('拼豆工坊 PDF 字体嵌入样例')
+  expect(extractedText).toContain('拼豆作品总览')
   expect(extractedText).toContain('作品名称：task037-local')
+  expect(extractedText).toContain('豆数尺寸：32 × 24 颗')
+  expect(extractedText).toContain('拼豆规格：2.6mm')
+  expect(extractedText).toContain('实际成品尺寸：83.2 × 62.4mm')
+  const { actualBeads, usedColors } = await page.evaluate(() => {
+    const element = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      element.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    const values = Array.from(project.grid!.cells)
+    const beads = values.filter((paletteIndex) => paletteIndex !== 0)
+    return { actualBeads: beads.length, usedColors: new Set(beads).size }
+  })
+  expect(extractedText).toContain(`使用颜色：${usedColors} 色`)
+  expect(extractedText).toContain(`拼豆总数：${actualBeads} 颗`)
+  const { OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const operators = await pdfOverviewPage.getOperatorList()
+  expect(operators.fnArray).toContain(OPS.paintImageXObject)
   const usedColor = MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === project.first)
   if (!usedColor) throw new Error('Expected a real MARD color in the generated Grid')
-  expect(extractedText).toContain(usedColor.displayCode)
-  expect(extractedText).toContain(usedColor.name)
+  expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
+    gridBeforeExport,
+  )
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+})
+
+test('TASK-084 exports a real PDF with complete non-overlapping page ranges', async ({ page }) => {
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-64').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 64, 48, generationStartedAt)
+  const gridBeforeExport = await page
+    .getByTestId('editor-grid')
+    .getAttribute('data-palette-indices')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-pdf-pagination-preview').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('task037-local_64x48.pdf')
+  const path = await download.path()
+  if (!path) throw new Error('Expected the pagination preview PDF to have a file path.')
+  const { readFile } = await import('node:fs/promises')
+  const pdfBytes = await readFile(path)
+  expect(pdfBytes.subarray(0, 5).toString('ascii')).toBe('%PDF-')
+
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
+  expect(pdf.numPages).toBe(5)
+  const overview = await pdf.getPage(1)
+  const overviewText = (await overview.getTextContent()).items
+    .filter((item) => 'str' in item)
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ')
+  expect(overviewText).toContain('拼豆作品总览')
+  expect(overviewText).toContain('豆数尺寸：64 × 48 颗')
+
+  const expectedRanges = [
+    ['行 0–30', '列 0–45'],
+    ['行 0–30', '列 46–63'],
+    ['行 31–47', '列 0–45'],
+    ['行 31–47', '列 46–63'],
+  ]
+  for (let index = 0; index < expectedRanges.length; index += 1) {
+    const pdfPage = await pdf.getPage(index + 2)
+    const extractedText = (await pdfPage.getTextContent()).items
+      .filter((item) => 'str' in item)
+      .map((item) => ('str' in item ? item.str : ''))
+      .join(' ')
+    expect(extractedText).toContain(expectedRanges[index]![0])
+    expect(extractedText).toContain(expectedRanges[index]![1])
+    const viewport = pdfPage.getViewport({ scale: 1 })
+    expect(viewport.width).toBeCloseTo(841.89, 0)
+    expect(viewport.height).toBeCloseTo(595.28, 0)
+  }
+
   expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
     gridBeforeExport,
   )

@@ -2,7 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createGrid, createProject } from '../../src/domain/project'
 import type { Project, Source } from '../../src/domain/project'
 import { PdfChineseFontError } from '../../src/features/export/pdf/font'
-import { downloadPdfFontSample } from '../../src/features/export/pdf/font-sample'
+import { downloadPdfOverview } from '../../src/features/export/pdf/overview'
+import { downloadPdfPaginationPreview } from '../../src/features/export/pdf/pagination-preview'
 import { downloadEffectPreviewPng } from '../../src/features/export/png/effect-preview'
 import { downloadReferencePng } from '../../src/features/export/png/reference-guide'
 import EditorExportActions from '../../src/features/editor/components/EditorExportActions.vue'
@@ -20,9 +21,15 @@ vi.mock('../../src/features/export/png/reference-guide', async (importOriginal) 
   return { ...actual, downloadReferencePng: vi.fn() }
 })
 
-vi.mock('../../src/features/export/pdf/font-sample', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/features/export/pdf/font-sample')>()
-  return { ...actual, downloadPdfFontSample: vi.fn() }
+vi.mock('../../src/features/export/pdf/overview', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/features/export/pdf/overview')>()
+  return { ...actual, downloadPdfOverview: vi.fn() }
+})
+
+vi.mock('../../src/features/export/pdf/pagination-preview', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/features/export/pdf/pagination-preview')>()
+  return { ...actual, downloadPdfPaginationPreview: vi.fn() }
 })
 
 const source: Source = {
@@ -48,7 +55,8 @@ describe('TASK-078 export actions component', () => {
   beforeEach(() => {
     vi.mocked(downloadEffectPreviewPng).mockReset().mockResolvedValue()
     vi.mocked(downloadReferencePng).mockReset().mockResolvedValue()
-    vi.mocked(downloadPdfFontSample).mockReset().mockResolvedValue()
+    vi.mocked(downloadPdfOverview).mockReset().mockResolvedValue()
+    vi.mocked(downloadPdfPaginationPreview).mockReset().mockResolvedValue()
   })
   afterEach(() => vi.restoreAllMocks())
 
@@ -106,22 +114,39 @@ describe('TASK-078 export actions component', () => {
     wrapper.unmount()
   })
 
-  it('uses the same Export Snapshot for PDF and shows an actionable font-load error', async () => {
+  it('exports a PDF overview from the same Export Snapshot and reports font errors', async () => {
     const wrapper = mount(EditorExportActions, { props: { project: projectWithGrid([1, 0, 35]) } })
     await wrapper.get('[data-testid="export-pdf-base"]').trigger('click')
     await flushPromises()
 
-    expect(downloadPdfFontSample).toHaveBeenCalledTimes(1)
-    const snapshot = vi.mocked(downloadPdfFontSample).mock.calls[0]![0]
+    expect(downloadPdfOverview).toHaveBeenCalledTimes(1)
+    const snapshot = vi.mocked(downloadPdfOverview).mock.calls[0]![0]
     expect(snapshot.project.projectName).toBe('Component Preview')
     expect(snapshot.stats.totalBeads).toBe(2)
 
-    vi.mocked(downloadPdfFontSample).mockRejectedValueOnce(
+    vi.mocked(downloadPdfOverview).mockRejectedValueOnce(
       new PdfChineseFontError('PDF 中文字体资源加载失败（HTTP 404）。'),
     )
     await wrapper.get('[data-testid="export-pdf-base"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('字体资源加载失败')
+    wrapper.unmount()
+  })
+
+  it('exports a pagination preview from one snapshot and reports export failures', async () => {
+    const wrapper = mount(EditorExportActions, { props: { project: projectWithGrid([1, 0, 35]) } })
+    await wrapper.get('[data-testid="export-pdf-pagination-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(downloadPdfPaginationPreview).toHaveBeenCalledTimes(1)
+    const snapshot = vi.mocked(downloadPdfPaginationPreview).mock.calls[0]![0]
+    expect(snapshot.grid.cells).toEqual(new Uint16Array([1, 0, 35]))
+    expect(snapshot.stats.totalBeads).toBe(2)
+
+    vi.mocked(downloadPdfPaginationPreview).mockRejectedValueOnce(new Error('PDF error'))
+    await wrapper.get('[data-testid="export-pdf-pagination-preview"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('PDF 分页预览生成失败')
     wrapper.unmount()
   })
 })
