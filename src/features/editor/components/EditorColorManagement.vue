@@ -2,7 +2,8 @@
   <section class="color-management" aria-label="已使用颜色管理" data-testid="used-color-management">
     <h3>已使用颜色</h3>
     <p data-testid="used-color-summary">
-      {{ stats?.usedColorCount ?? 0 }} / 291 种颜色 · {{ stats?.totalBeads ?? 0 }} 颗拼豆
+      {{ materialView?.usedColorCount ?? 0 }} / 291 种颜色 ·
+      {{ materialView?.totalBeads ?? 0 }} 颗拼豆
     </p>
     <label for="used-color-search">搜索已使用颜色</label>
     <input
@@ -118,24 +119,19 @@ import { useProjectStore } from '../../../app/stores/projectStore'
 import { getPaletteEntryByIndex, MARD_291_PALETTE } from '../../../domain/palette'
 import { createPaletteReplacementPlan } from '../../../domain/project/color-replacement'
 import type { Grid } from '../../../domain/project/grid'
-import { deriveProjectStats, type ProjectStats } from '../../../domain/project/stats'
 import type { Project } from '../../../domain/project/types'
 import type { ReplacementPreview } from '../replacement-preview'
-import {
-  deriveUsedColorRowsFromStats,
-  filterUsedColorRows,
-  sortUsedColorRows,
-  type UsedColorSort,
-} from '../color-management'
+import type { MaterialStatsView } from '../materials/material-stats-view'
+import { filterUsedColorRows, sortUsedColorRows, type UsedColorSort } from '../color-management'
 import UnifiedColorPicker from './UnifiedColorPicker.vue'
 
-const props = defineProps<{ project: Project | null; stats: ProjectStats | null }>()
+const props = defineProps<{ project: Project | null; materialView: MaterialStatsView | null }>()
 const emit = defineEmits<{ 'replacement-preview': [preview: ReplacementPreview | null] }>()
 const editor = useEditorStore()
 const projectStore = useProjectStore()
 const searchQuery = ref('')
 const sortOrder = ref<UsedColorSort>('count')
-const usedRows = computed(() => deriveUsedColorRowsFromStats(props.stats))
+const usedRows = computed(() => props.materialView?.rows ?? [])
 const visibleRows = computed(() =>
   sortUsedColorRows(filterUsedColorRows(usedRows.value, searchQuery.value), sortOrder.value),
 )
@@ -170,7 +166,7 @@ const sourceCount = computed(() => {
   const source = sourcePaletteIndex.value
   const current = projectStore.currentProject
   if (source === null || !current?.grid || !isCurrentSnapshot()) return 0
-  return props.stats?.usageByPaletteIndex[source] ?? 0
+  return props.materialView?.rows.find((row) => row.paletteIndex === source)?.count ?? 0
 })
 const canConfirm = computed(() => {
   const source = sourcePaletteIndex.value
@@ -206,7 +202,7 @@ function beginReplacement(sourceIndex: number) {
   if (
     !current ||
     !grid ||
-    !(deriveProjectStats(current).usageByPaletteIndex[sourceIndex] > 0) ||
+    !usedRows.value.some((row) => row.paletteIndex === sourceIndex && row.count > 0) ||
     !getPaletteEntryByIndex(MARD_291_PALETTE, sourceIndex)
   ) {
     replacementMessage.value = '源颜色已不在当前作品中，请重新选择。'

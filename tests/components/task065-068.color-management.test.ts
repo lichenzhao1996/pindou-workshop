@@ -9,6 +9,7 @@ import { createGrid, createProject, deriveProjectStats } from '../../src/domain/
 import type { Project, Source } from '../../src/domain/project'
 import EditorCanvasArea from '../../src/features/editor/components/EditorCanvasArea.vue'
 import EditorColorManagement from '../../src/features/editor/components/EditorColorManagement.vue'
+import { deriveMaterialStatsView } from '../../src/features/editor/materials/material-stats-view'
 import { GRID_AXIS_MARGIN } from '../../src/rendering/viewport'
 import {
   createCanvasContextMock,
@@ -46,7 +47,9 @@ function mountColorManagement(project: Project) {
       return () =>
         h(EditorColorManagement, {
           project: projects.currentProject,
-          stats: projects.currentProject?.grid ? deriveProjectStats(projects.currentProject) : null,
+          materialView: projects.currentProject?.grid
+            ? deriveMaterialStatsView(deriveProjectStats(projects.currentProject))
+            : null,
         })
     },
   })

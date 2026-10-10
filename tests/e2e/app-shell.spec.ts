@@ -2450,6 +2450,126 @@ test('TASK-073 restores edited Project data after a real browser refresh and sta
     .toMatchObject({ project: { revision: 2 }, generationIntent: null })
 })
 
+test('TASK-074 derives the visible materials view after real Worker edits, Undo/Redo and refresh', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const generated = await assertCommittedGrid(page, 32, 24, generationStartedAt)
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const readGridState = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('#app') as HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } }
+          }
+        }
+      }
+      const project =
+        root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+      return {
+        projectId: project.projectId,
+        revision: project.revision,
+        cells: Array.from(project.grid!.cells),
+      }
+    })
+
+  const assertMaterialsMatchGrid = async (cells: number[]) => {
+    const counts = new Map<number, number>()
+    for (const paletteIndex of cells) {
+      if (paletteIndex !== 0) counts.set(paletteIndex, (counts.get(paletteIndex) ?? 0) + 1)
+    }
+    const rows = [...counts.entries()].sort(
+      ([leftIndex, leftCount], [rightIndex, rightCount]) =>
+        rightCount - leftCount || leftIndex - rightIndex,
+    )
+    const totalBeads = cells.filter((paletteIndex) => paletteIndex !== 0).length
+    const summary = page.getByTestId('used-color-summary')
+    await expect(summary).toHaveText(`${rows.length} / 291 种颜色 · ${totalBeads} 颗拼豆`)
+    await expect(page.getByTestId('used-color-management')).toBeVisible()
+    const visibleRows = page.locator('[data-testid^="used-color-row-"]')
+    await expect(visibleRows).toHaveCount(rows.length)
+    for (const [paletteIndex, count] of rows) {
+      const entry = MARD_291_PALETTE.entries.find(
+        (candidate) => candidate.paletteIndex === paletteIndex,
+      )
+      if (!entry) throw new Error(`Expected formal MARD entry for palette index ${paletteIndex}`)
+      const row = page.getByTestId(`used-color-row-${paletteIndex}`)
+      await expect(row).toContainText(entry.displayCode)
+      await expect(row).toContainText(entry.name)
+      await expect(row).toContainText(`${count} 颗`)
+      await expect(row).toContainText(`${((count / totalBeads) * 100).toFixed(1)}%`)
+    }
+    expect(rows.some(([paletteIndex]) => paletteIndex === 0)).toBe(false)
+  }
+
+  const initial = await readGridState()
+  expect(initial.projectId).toBe(generated.projectId)
+  await assertMaterialsMatchGrid(initial.cells)
+
+  const targetPaletteIndex = initial.cells[0] === 291 ? 290 : 291
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId(`picker-color-${targetPaletteIndex}`).click()
+  await page.getByTestId('picker-close').click()
+  const geometry = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const canvas = await page.getByTestId('editor-canvas').boundingBox()
+  if (!canvas) throw new Error('Expected Canvas bounds for materials edit.')
+  const firstCell = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE / 2, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    geometry,
+  )
+  await page.mouse.click(canvas.x + firstCell.x, canvas.y + firstCell.y)
+  await page.getByTestId('apply-current-color').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  const edited = await readGridState()
+  expect(edited.cells[0]).toBe(targetPaletteIndex)
+  await assertMaterialsMatchGrid(edited.cells)
+
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  const undone = await readGridState()
+  expect(undone.cells).toEqual(initial.cells)
+  await assertMaterialsMatchGrid(undone.cells)
+
+  await page.getByTestId('editor-redo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  const redone = await readGridState()
+  expect(redone.cells).toEqual(edited.cells)
+  await assertMaterialsMatchGrid(redone.cells)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: generated.projectId, revision: 1, cells: edited.cells },
+    })
+
+  await page.reload()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute(
+    'data-project-id',
+    generated.projectId,
+  )
+  const restored = await readGridState()
+  expect(restored.revision).toBe(1)
+  expect(restored.cells).toEqual(edited.cells)
+  await assertMaterialsMatchGrid(restored.cells)
+  expect(workerUrls.filter((url) => url.includes('generation.worker'))).toHaveLength(1)
+})
+
 test('TASK-073 preserves A while pending B refreshes, cancels to A, and confirmed C replaces A', async ({
   page,
 }) => {

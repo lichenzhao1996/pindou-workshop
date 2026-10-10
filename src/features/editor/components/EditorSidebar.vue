@@ -73,7 +73,7 @@
     </section>
     <EditorColorManagement
       :project="project"
-      :stats="stats"
+      :material-view="materialView"
       @replacement-preview="handleReplacementPreview"
     />
     <RouterLink to="/crop">返回裁剪与生成设置</RouterLink>
@@ -91,11 +91,13 @@ import { MAX_PALETTE_INDEX, MIN_PALETTE_INDEX } from '../../../domain/project/co
 import { deriveProjectStats } from '../../../domain/project/stats'
 import type { Project } from '../../../domain/project/types'
 import type { ReplacementPreview } from '../replacement-preview'
+import { deriveMaterialStatsView } from '../materials/material-stats-view'
 import EditorColorManagement from './EditorColorManagement.vue'
 
 const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ 'replacement-preview': [preview: ReplacementPreview | null] }>()
 const stats = computed(() => (props.project?.grid ? deriveProjectStats(props.project) : null))
+const materialView = computed(() => deriveMaterialStatsView(stats.value))
 const editor = useEditorStore()
 const projectStore = useProjectStore()
 const replacementPreviewActive = ref(false)
