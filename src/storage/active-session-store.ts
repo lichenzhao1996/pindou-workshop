@@ -1,21 +1,57 @@
 import { MARD_291_PALETTE_VERSION } from '../domain/palette/version'
 import {
   assertValidProjectSnapshot,
+  assertValidProjectSource,
   restoreProjectSnapshot,
   serializeProjectSnapshot,
 } from '../domain/project/serialization'
-import type { Project, ProjectSnapshot } from '../domain/project'
+import type {
+  CropState,
+  GenerationState,
+  Project,
+  ProjectSnapshot,
+  Source,
+} from '../domain/project'
 
 export const ACTIVE_SESSION_DATABASE_NAME = 'pindou-workshop'
 export const ACTIVE_SESSION_DATABASE_VERSION = 1
 export const ACTIVE_SESSION_OBJECT_STORE_NAME = 'active-session'
 export const ACTIVE_SESSION_RECORD_KEY = 'current'
-export const ACTIVE_SESSION_RECORD_SCHEMA_VERSION = 1
+export const LEGACY_ACTIVE_SESSION_RECORD_SCHEMA_VERSION = 1
+export const ACTIVE_SESSION_RECORD_SCHEMA_VERSION = 2
+
+export interface PendingUploadSnapshot {
+  uploadId: string
+  source: Source
+}
+
+export interface GenerationIntentSnapshot {
+  intentId: string
+  projectId: string
+  sourceIdentity: string
+  crop: CropState
+  generation: GenerationState
+  startedAt: string
+}
+
+export interface ActiveSessionState {
+  project: Project | null
+  pendingUpload: PendingUploadSnapshot | null
+  generationIntent: GenerationIntentSnapshot | null
+}
+
+interface LegacyActiveSessionRecord {
+  id: typeof ACTIVE_SESSION_RECORD_KEY
+  schemaVersion: typeof LEGACY_ACTIVE_SESSION_RECORD_SCHEMA_VERSION
+  project: ProjectSnapshot
+}
 
 interface ActiveSessionRecord {
   id: typeof ACTIVE_SESSION_RECORD_KEY
-  schemaVersion: number
-  project: ProjectSnapshot
+  schemaVersion: typeof ACTIVE_SESSION_RECORD_SCHEMA_VERSION
+  project: ProjectSnapshot | null
+  pendingUpload: PendingUploadSnapshot | null
+  generationIntent: GenerationIntentSnapshot | null
 }
 
 export type ActiveSessionStoreErrorCode =
@@ -41,6 +77,8 @@ export class ActiveSessionStoreError extends Error {
 export interface ActiveSessionStore {
   saveActiveSession(project: Project): Promise<void>
   loadActiveSession(): Promise<Project | null>
+  saveActiveSessionState(state: ActiveSessionState): Promise<void>
+  loadActiveSessionState(): Promise<ActiveSessionState | null>
   clearActiveSession(): Promise<void>
   close(): Promise<void>
 }
@@ -56,18 +94,141 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isActiveSessionRecord(value: unknown): value is ActiveSessionRecord {
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort()
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index])
+}
+
+function isLegacyActiveSessionRecord(value: unknown): value is LegacyActiveSessionRecord {
   if (!isRecord(value)) return false
 
-  const keys = Object.keys(value).sort()
   return (
-    keys.length === 3 &&
-    keys[0] === 'id' &&
-    keys[1] === 'project' &&
-    keys[2] === 'schemaVersion' &&
+    hasExactKeys(value, ['id', 'project', 'schemaVersion']) &&
     value.id === ACTIVE_SESSION_RECORD_KEY &&
-    typeof value.schemaVersion === 'number'
+    value.schemaVersion === LEGACY_ACTIVE_SESSION_RECORD_SCHEMA_VERSION
   )
+}
+
+function isActiveSessionRecord(value: unknown): value is ActiveSessionRecord {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['generationIntent', 'id', 'pendingUpload', 'project', 'schemaVersion']) &&
+    value.id === ACTIVE_SESSION_RECORD_KEY &&
+    value.schemaVersion === ACTIVE_SESSION_RECORD_SCHEMA_VERSION
+  )
+}
+
+/** Project identity plus source metadata ties a persisted intent to its formal input. */
+export function createProjectSourceIdentity(project: Project): string {
+  const source = project.source
+  return JSON.stringify([
+    project.projectId,
+    source.originalFileName,
+    source.mimeType,
+    source.originalWidth,
+    source.originalHeight,
+    source.originalImage.type,
+    source.originalImage.size,
+  ])
+}
+
+function validatePendingUpload(value: unknown): asserts value is PendingUploadSnapshot {
+  if (!isRecord(value) || !hasExactKeys(value, ['source', 'uploadId'])) {
+    throw new TypeError('Pending upload snapshot has an invalid structure')
+  }
+  if (typeof value.uploadId !== 'string' || !value.uploadId.trim()) {
+    throw new TypeError('Pending upload uploadId must not be empty')
+  }
+  assertValidProjectSource(value.source)
+}
+
+function copySource(source: Source): Source {
+  return {
+    originalImage: source.originalImage,
+    originalFileName: source.originalFileName,
+    mimeType: source.mimeType,
+    originalWidth: source.originalWidth,
+    originalHeight: source.originalHeight,
+  }
+}
+
+function sameCrop(left: CropState, right: CropState): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
+    left.rotation === right.rotation &&
+    left.aspectRatio === right.aspectRatio
+  )
+}
+
+function sameGeneration(left: GenerationState, right: GenerationState): boolean {
+  return (
+    left.widthBeads === right.widthBeads &&
+    left.heightBeads === right.heightBeads &&
+    left.beadSizeMm === right.beadSizeMm &&
+    left.mode === right.mode &&
+    left.paletteVersion === right.paletteVersion &&
+    left.algorithmVersion === right.algorithmVersion
+  )
+}
+
+function validateGenerationIntent(
+  value: unknown,
+  project: Project,
+): asserts value is GenerationIntentSnapshot {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'crop',
+      'generation',
+      'intentId',
+      'projectId',
+      'sourceIdentity',
+      'startedAt',
+    ])
+  ) {
+    throw new TypeError('Generation intent has an invalid structure')
+  }
+  if (
+    typeof value.intentId !== 'string' ||
+    !value.intentId.trim() ||
+    value.projectId !== project.projectId ||
+    value.sourceIdentity !== createProjectSourceIdentity(project) ||
+    typeof value.startedAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.startedAt)) ||
+    !isRecord(value.crop) ||
+    !isRecord(value.generation) ||
+    !hasExactKeys(value.crop, ['aspectRatio', 'height', 'rotation', 'width', 'x', 'y']) ||
+    !hasExactKeys(value.generation, [
+      'algorithmVersion',
+      'beadSizeMm',
+      'heightBeads',
+      'mode',
+      'paletteVersion',
+      'widthBeads',
+    ]) ||
+    !sameCrop(value.crop as unknown as CropState, project.crop) ||
+    !sameGeneration(value.generation as unknown as GenerationState, project.generation)
+  ) {
+    throw new TypeError('Generation intent does not match its formal Project inputs')
+  }
+}
+
+export function createGenerationIntentSnapshot(
+  project: Project,
+  intentId: string,
+  startedAt: Date = new Date(),
+): GenerationIntentSnapshot {
+  return {
+    intentId,
+    projectId: project.projectId,
+    sourceIdentity: createProjectSourceIdentity(project),
+    crop: { ...project.crop },
+    generation: { ...project.generation },
+    startedAt: startedAt.toISOString(),
+  }
 }
 
 function assertCompatibleProject(snapshot: ProjectSnapshot): void {
@@ -88,11 +249,11 @@ function assertCompatibleProject(snapshot: ProjectSnapshot): void {
   }
 }
 
-function createRecord(project: Project): ActiveSessionRecord {
-  let snapshot: ProjectSnapshot
+function serializeProject(project: Project): ProjectSnapshot {
   try {
-    snapshot = serializeProjectSnapshot(project)
+    const snapshot = serializeProjectSnapshot(project)
     assertCompatibleProject(snapshot)
+    return snapshot
   } catch (cause) {
     throw new ActiveSessionStoreError(
       'invalid-project',
@@ -100,36 +261,142 @@ function createRecord(project: Project): ActiveSessionRecord {
       cause,
     )
   }
+}
+
+function createRecord(state: ActiveSessionState): ActiveSessionRecord {
+  if (!state.project && !state.pendingUpload && !state.generationIntent) {
+    throw new ActiveSessionStoreError(
+      'invalid-record',
+      'An empty active-session record must be cleared instead of saved.',
+    )
+  }
+  let project: ProjectSnapshot | null = null
+  if (state.project) project = serializeProject(state.project)
+
+  let pendingUpload: PendingUploadSnapshot | null = null
+  if (state.pendingUpload) {
+    try {
+      validatePendingUpload(state.pendingUpload)
+      pendingUpload = {
+        uploadId: state.pendingUpload.uploadId,
+        source: copySource(state.pendingUpload.source),
+      }
+    } catch (cause) {
+      throw new ActiveSessionStoreError(
+        'invalid-record',
+        'The pending upload cannot be saved as an active session.',
+        cause,
+      )
+    }
+  }
+
+  let generationIntent: GenerationIntentSnapshot | null = null
+  if (state.generationIntent) {
+    if (!state.project) {
+      throw new ActiveSessionStoreError(
+        'invalid-record',
+        'A generation intent requires a formal Project.',
+      )
+    }
+    try {
+      validateGenerationIntent(state.generationIntent, state.project)
+      generationIntent = {
+        ...state.generationIntent,
+        crop: { ...state.generationIntent.crop },
+        generation: { ...state.generationIntent.generation },
+      }
+    } catch (cause) {
+      throw new ActiveSessionStoreError(
+        'invalid-record',
+        'The generation intent does not match its formal Project.',
+        cause,
+      )
+    }
+  }
 
   return {
     id: ACTIVE_SESSION_RECORD_KEY,
     schemaVersion: ACTIVE_SESSION_RECORD_SCHEMA_VERSION,
-    project: snapshot,
+    project,
+    pendingUpload,
+    generationIntent,
   }
 }
 
-function restoreRecord(value: unknown): Project {
+function restoreProject(value: unknown): Project {
+  try {
+    assertValidProjectSnapshot(value)
+    assertCompatibleProject(value)
+    return restoreProjectSnapshot(value)
+  } catch (cause) {
+    throw new ActiveSessionStoreError(
+      'invalid-record',
+      'The active-session Project snapshot is invalid or incompatible.',
+      cause,
+    )
+  }
+}
+
+function restoreRecord(value: unknown): ActiveSessionState {
+  if (isLegacyActiveSessionRecord(value)) {
+    return {
+      project: restoreProject(value.project),
+      pendingUpload: null,
+      generationIntent: null,
+    }
+  }
+  if (
+    isRecord(value) &&
+    value.id === ACTIVE_SESSION_RECORD_KEY &&
+    value.schemaVersion !== 1 &&
+    value.schemaVersion !== 2
+  ) {
+    throw new ActiveSessionStoreError(
+      'unsupported-record-version',
+      `Active-session record schemaVersion ${value.schemaVersion} is not supported.`,
+    )
+  }
   if (!isActiveSessionRecord(value)) {
     throw new ActiveSessionStoreError(
       'invalid-record',
       'The active-session record has an invalid structure.',
     )
   }
-  if (value.schemaVersion !== ACTIVE_SESSION_RECORD_SCHEMA_VERSION) {
+  if (value.project === null && value.pendingUpload === null) {
     throw new ActiveSessionStoreError(
-      'unsupported-record-version',
-      `Active-session record schemaVersion ${value.schemaVersion} is not supported.`,
+      'invalid-record',
+      'An empty active-session record is invalid.',
     )
   }
-
   try {
-    assertValidProjectSnapshot(value.project)
-    assertCompatibleProject(value.project)
-    return restoreProjectSnapshot(value.project)
+    const project = value.project === null ? null : restoreProject(value.project)
+    if (value.pendingUpload !== null) validatePendingUpload(value.pendingUpload)
+    if (value.generationIntent !== null) {
+      if (!project) throw new TypeError('Generation intent requires a formal Project')
+      validateGenerationIntent(value.generationIntent, project)
+    }
+    return {
+      project,
+      pendingUpload:
+        value.pendingUpload === null
+          ? null
+          : {
+              uploadId: value.pendingUpload.uploadId,
+              source: copySource(value.pendingUpload.source),
+            },
+      generationIntent:
+        value.generationIntent === null
+          ? null
+          : {
+              ...value.generationIntent,
+              crop: { ...value.generationIntent.crop },
+              generation: { ...value.generationIntent.generation },
+            },
+    }
   } catch (cause) {
     throw new ActiveSessionStoreError(
       'invalid-record',
-      'The active-session Project snapshot is invalid or incompatible.',
+      'The active-session record contains invalid or incompatible data.',
       cause,
     )
   }
@@ -312,8 +579,8 @@ export function createActiveSessionStore(
     return databasePromise
   }
 
-  async function saveActiveSession(project: Project): Promise<void> {
-    const record = createRecord(project)
+  async function saveActiveSessionState(state: ActiveSessionState): Promise<void> {
+    const record = createRecord(state)
     const database = await getDatabase()
     let transaction: IDBTransaction | undefined
     let completion: Promise<void> | undefined
@@ -337,6 +604,10 @@ export function createActiveSessionStore(
   }
 
   async function loadActiveSession(): Promise<Project | null> {
+    return (await loadActiveSessionState())?.project ?? null
+  }
+
+  async function loadActiveSessionState(): Promise<ActiveSessionState | null> {
     const database = await getDatabase()
     let transaction: IDBTransaction | undefined
     let completion: Promise<void> | undefined
@@ -359,6 +630,10 @@ export function createActiveSessionStore(
       await completion?.catch(() => undefined)
       throw transactionError('read', cause)
     }
+  }
+
+  async function saveActiveSession(project: Project): Promise<void> {
+    await saveActiveSessionState({ project, pendingUpload: null, generationIntent: null })
   }
 
   async function clearActiveSession(): Promise<void> {
@@ -395,7 +670,14 @@ export function createActiveSessionStore(
     }
   }
 
-  return { saveActiveSession, loadActiveSession, clearActiveSession, close }
+  return {
+    saveActiveSession,
+    loadActiveSession,
+    saveActiveSessionState,
+    loadActiveSessionState,
+    clearActiveSession,
+    close,
+  }
 }
 
 const defaultActiveSessionStore = createActiveSessionStore()
@@ -403,5 +685,8 @@ const defaultActiveSessionStore = createActiveSessionStore()
 export const saveActiveSession = (project: Project) =>
   defaultActiveSessionStore.saveActiveSession(project)
 export const loadActiveSession = () => defaultActiveSessionStore.loadActiveSession()
+export const saveActiveSessionState = (state: ActiveSessionState) =>
+  defaultActiveSessionStore.saveActiveSessionState(state)
+export const loadActiveSessionState = () => defaultActiveSessionStore.loadActiveSessionState()
 export const clearActiveSession = () => defaultActiveSessionStore.clearActiveSession()
 export const closeActiveSessionStore = () => defaultActiveSessionStore.close()

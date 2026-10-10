@@ -66,6 +66,15 @@
         >
           取消
         </button>
+        <button
+          v-if="isNewUnconfirmedUpload"
+          type="button"
+          data-testid="crop-cancel-upload"
+          :disabled="isGenerating"
+          @click="cancelNewUpload"
+        >
+          取消新图片
+        </button>
       </div>
 
       <p v-if="confirmationMessage" data-testid="crop-confirmation-status" role="status">
@@ -223,10 +232,11 @@
 
 <script setup lang="ts">
 import 'cropperjs/dist/cropper.css'
-import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { computed, inject, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { matchedRouteKey, onBeforeRouteLeave, RouterLink, useRouter } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
 import { useUploadStore } from '../../app/stores/uploadStore'
+import { autoSaveCoordinator } from '../../storage/auto-save-coordinator'
 import {
   DEFAULT_GRID_WIDTH,
   MAX_GRID_WIDTH,
@@ -291,6 +301,11 @@ const canGenerate = computed(() => {
     widthError.value === null &&
     !pendingMode.value
   )
+})
+const isNewUnconfirmedUpload = computed(() => {
+  const input = uploadStore.pendingInput
+  const dimensions = uploadStore.pendingDimensions
+  return Boolean(input && dimensions && !findMatchingProject(input, dimensions))
 })
 
 async function generate() {
@@ -432,7 +447,11 @@ function applyMode(mode: GenerationMode, regenerate = false) {
   const hadGrid = currentProject !== null && currentProject.grid !== null
   selectedMode.value = mode
   if (currentProject) {
-    projectStore.setCurrentProject(updateProjectGenerationMode(currentProject, mode))
+    const updatedProject = updateProjectGenerationMode(currentProject, mode)
+    if (updatedProject !== currentProject) {
+      projectStore.setCurrentProject(updatedProject)
+      void projectStore.persistCurrentProject(true)
+    }
     if (hadGrid || regenerate) {
       // A mode confirmation regenerates the formal crop, never an unconfirmed Cropper draft.
       void generateProject(false)
@@ -477,7 +496,11 @@ function applyWidth(widthBeads: number) {
     dimensions &&
     sourceMatchesInput(currentProject.source, input, dimensions)
   ) {
-    projectStore.setCurrentProject(updateProjectGenerationSize(currentProject, widthBeads))
+    const updatedProject = updateProjectGenerationSize(currentProject, widthBeads)
+    if (updatedProject !== currentProject) {
+      projectStore.setCurrentProject(updatedProject)
+      void projectStore.persistCurrentProject(true)
+    }
   }
 }
 
@@ -520,7 +543,7 @@ async function initializeCropper(inputToken: number, preferredCrop?: CropState) 
   )
 }
 
-function confirmCurrentCrop() {
+async function confirmCurrentCrop() {
   const input = uploadStore.pendingInput
   const dimensions = uploadStore.pendingDimensions
   const currentCrop = cropState.value
@@ -547,12 +570,21 @@ function confirmCurrentCrop() {
   const nextProject = updateProjectGenerationMode(projectWithCropAndSize, selectedMode.value)
 
   projectStore.setCurrentProject(nextProject)
+  await projectStore.persistCurrentProject(true)
   confirmedPreviewInput.value = {
     originalImage: nextProject.source.originalImage,
     crop: nextProject.crop,
   }
   cropState.value = nextProject.crop
   confirmationMessage.value = '裁剪已确认。'
+}
+
+async function cancelNewUpload() {
+  const uploadId = uploadStore.pendingUploadId
+  if (!uploadId) return
+  await autoSaveCoordinator.clearPendingUpload(uploadId)
+  uploadStore.clearPendingInput(uploadId)
+  await router.push({ name: 'home' })
 }
 
 function cancelCrop() {
@@ -638,6 +670,16 @@ watch(
     }
   },
 )
+
+if (inject(matchedRouteKey, undefined)) {
+  onBeforeRouteLeave(async () => {
+    if (!isNewUnconfirmedUpload.value) return
+    const uploadId = uploadStore.pendingUploadId
+    if (!uploadId) return
+    await autoSaveCoordinator.clearPendingUpload(uploadId)
+    uploadStore.clearPendingInput(uploadId)
+  })
+}
 
 onBeforeUnmount(() => {
   disposed = true

@@ -6,6 +6,7 @@ import {
   ACTIVE_SESSION_OBJECT_STORE_NAME,
   ACTIVE_SESSION_RECORD_KEY,
   ACTIVE_SESSION_RECORD_SCHEMA_VERSION,
+  LEGACY_ACTIVE_SESSION_RECORD_SCHEMA_VERSION,
   ActiveSessionStoreError,
   createActiveSessionStore,
 } from '../../src/storage/active-session-store'
@@ -147,6 +148,30 @@ describe('TASK-071 active-session IndexedDB store', () => {
     const { store } = createTestStore()
 
     await expect(store.loadActiveSession()).resolves.toBeNull()
+  })
+
+  it('reads a valid v1 Project record as a formal Project without migrating or deleting it', async () => {
+    const { indexedDB, databaseName, store } = createTestStore()
+    const project = createProjectFixture('旧版会话作品')
+    await writeRawRecord(indexedDB, databaseName, {
+      id: ACTIVE_SESSION_RECORD_KEY,
+      schemaVersion: LEGACY_ACTIVE_SESSION_RECORD_SCHEMA_VERSION,
+      project: serializeProjectSnapshot(project),
+    })
+
+    await expect(store.loadActiveSession()).resolves.toMatchObject({
+      projectId: project.projectId,
+      projectName: project.projectName,
+      revision: project.revision,
+    })
+    await expect(store.loadActiveSessionState()).resolves.toMatchObject({
+      project: { projectId: project.projectId },
+      pendingUpload: null,
+      generationIntent: null,
+    })
+    expect(await readRawRecords(indexedDB, databaseName)).toMatchObject([
+      { id: ACTIVE_SESSION_RECORD_KEY, schemaVersion: LEGACY_ACTIVE_SESSION_RECORD_SCHEMA_VERSION },
+    ])
   })
 
   it('round-trips the complete Project, Blob bytes, MIME type, and Uint16Array values', async () => {

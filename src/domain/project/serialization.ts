@@ -56,6 +56,10 @@ function assertSource(value: unknown): asserts value is Source {
   assertInteger(value.originalHeight, 'Project source originalHeight', 1)
 }
 
+export function assertValidProjectSource(value: unknown): asserts value is Source {
+  assertSource(value)
+}
+
 function assertCrop(value: unknown): asserts value is CropState {
   if (!isRecord(value)) {
     throw new TypeError('Project crop must be an object')

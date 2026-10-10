@@ -9,6 +9,143 @@ const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
 )
+
+async function clearActiveSessionDatabase(page: Page) {
+  await page.goto('/')
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.deleteDatabase('pindou-workshop')
+        request.addEventListener('success', () => resolve(), { once: true })
+        request.addEventListener('error', () => reject(request.error), { once: true })
+        request.addEventListener('blocked', () => reject(new Error('IDB cleanup was blocked.')))
+      }),
+  )
+}
+
+async function readActiveSessionRecord(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<{
+        schemaVersion: number
+        project: null | {
+          projectId: string
+          projectName: string
+          revision: number
+          updatedAt: string
+          generationMode: string
+          generationWidth: number
+          generationHeight: number
+          cropRotation: number
+          width: number | null
+          height: number | null
+          cells: number[] | null
+          cellsAreUint16Array: boolean
+          sourceFileName: string | null
+          sourceMimeType: string
+          sourceBytes: number
+        }
+        pendingUpload: null | { uploadId: string; fileName: string | null; bytes: number }
+        generationIntent: unknown
+        extraKeys: string[]
+      } | null>((resolve, reject) => {
+        const request = indexedDB.open('pindou-workshop', 1)
+        request.addEventListener(
+          'error',
+          () => reject(request.error ?? new Error('Could not open active-session database.')),
+          { once: true },
+        )
+        request.addEventListener(
+          'success',
+          () => {
+            const database = request.result
+            const transaction = database.transaction('active-session', 'readonly')
+            const getRequest = transaction.objectStore('active-session').get('current')
+            getRequest.addEventListener(
+              'success',
+              () => {
+                const record = getRequest.result
+                const project = record?.project
+                const grid = project?.grid
+                resolve(
+                  record
+                    ? {
+                        schemaVersion: record.schemaVersion,
+                        project: project
+                          ? {
+                              projectId: project.projectId,
+                              projectName: project.projectName,
+                              revision: project.revision,
+                              updatedAt: project.updatedAt,
+                              generationMode: project.generation.mode,
+                              generationWidth: project.generation.widthBeads,
+                              generationHeight: project.generation.heightBeads,
+                              cropRotation: project.crop.rotation,
+                              width: grid?.width ?? null,
+                              height: grid?.height ?? null,
+                              cells: grid?.cells ? Array.from(grid.cells as Uint16Array) : null,
+                              cellsAreUint16Array: grid?.cells instanceof Uint16Array,
+                              sourceFileName: project.source.originalFileName,
+                              sourceMimeType: project.source.mimeType,
+                              sourceBytes: project.source.originalImage.size,
+                            }
+                          : null,
+                        pendingUpload: record.pendingUpload
+                          ? {
+                              uploadId: record.pendingUpload.uploadId,
+                              fileName: record.pendingUpload.source.originalFileName,
+                              bytes: record.pendingUpload.source.originalImage.size,
+                            }
+                          : null,
+                        generationIntent: record.generationIntent,
+                        extraKeys: Object.keys(record).sort(),
+                      }
+                    : null,
+                )
+                database.close()
+              },
+              { once: true },
+            )
+            getRequest.addEventListener(
+              'error',
+              () => {
+                database.close()
+                reject(getRequest.error ?? new Error('Could not read active-session record.'))
+              },
+              { once: true },
+            )
+          },
+          { once: true },
+        )
+      }),
+  )
+}
+
+async function uploadCanvasImage(page: Page, fileName: string, color = '#FAF4C8') {
+  await page.evaluate(
+    async ({ name, fill }) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 40
+      canvas.height = 30
+      const context = canvas.getContext('2d')!
+      context.fillStyle = fill
+      context.fillRect(0, 0, canvas.width / 2, canvas.height)
+      context.fillStyle = '#27523A'
+      context.fillRect(canvas.width / 2, 0, canvas.width / 2, canvas.height)
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((value) =>
+          value ? resolve(value) : reject(new Error('PNG encoding failed')),
+        )
+      })
+      const input = document.querySelector<HTMLInputElement>('[data-testid="image-file-input"]')!
+      const transfer = new DataTransfer()
+      transfer.items.add(new File([blob], name, { type: 'image/png' }))
+      input.files = transfer.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    },
+    { name: fileName, fill: color },
+  )
+}
 const routeCases = [
   { path: '/', heading: '把你的图片，变成可以直接制作的拼豆图纸' },
   { path: '/crop', heading: '确认图片范围' },
@@ -1713,4 +1850,276 @@ test('TASK-069 renames the real Worker Project without breaking Grid history', a
   const fallback = await readState()
   expect(fallback.revision).toBe(sameName.revision)
   expect(fallback.cells).toEqual(sameName.cells)
+})
+
+test('TASK-072 keeps an old formal Project while a second real upload is pending and cancelled', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+
+  await uploadCanvasImage(page, 'first-project.png', '#FAF4C8')
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      schemaVersion: 2,
+      project: null,
+      pendingUpload: { fileName: 'first-project.png', bytes: expect.any(Number) },
+      generationIntent: null,
+    })
+
+  await page.getByTestId('crop-confirm').click()
+  await expect(page.getByTestId('crop-confirmation-status')).toContainText('裁剪已确认')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { sourceFileName: 'first-project.png' }, pendingUpload: null })
+  await page.getByTestId('grid-width-preset-32').click()
+  const startedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const generated = await assertCommittedGrid(page, 32, 24, startedAt)
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: {
+        projectId: generated.projectId,
+        revision: 0,
+        width: 32,
+        height: 24,
+        cellsAreUint16Array: true,
+      },
+      pendingUpload: null,
+      generationIntent: null,
+    })
+
+  const savedOldProject = await readActiveSessionRecord(page)
+  expect(savedOldProject?.project?.cells).toHaveLength(32 * 24)
+  expect(savedOldProject?.project?.cells?.every((value) => value >= 1 && value <= 291)).toBe(true)
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/crop$/)
+  await page.goBack()
+  await expect(page).toHaveURL('/')
+  await uploadCanvasImage(page, 'replacement.png', '#27523A')
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: generated.projectId, revision: 0 },
+      pendingUpload: { fileName: 'replacement.png' },
+    })
+
+  await page.getByTestId('crop-cancel-upload').click()
+  await expect(page).toHaveURL('/')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: generated.projectId, revision: 0 },
+      pendingUpload: null,
+      generationIntent: null,
+    })
+  const runtimeProjectId = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    return root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+      .projectId
+  })
+  expect(runtimeProjectId).toBe(generated.projectId)
+})
+
+test('TASK-072 persists real Chromium Grid edits and the latest Undo/Redo state', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadCanvasImage(page, 'editable.png')
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      pendingUpload: { fileName: 'editable.png' },
+      project: null,
+    })
+
+  await page.getByTestId('crop-confirm').click()
+  await page.getByTestId('grid-width-preset-32').click()
+  const startedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 32, 24, startedAt)
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const generatedRecord = await readActiveSessionRecord(page)
+  expect(generatedRecord?.project?.cellsAreUint16Array).toBe(true)
+  expect(generatedRecord?.project?.revision).toBe(0)
+  expect(generatedRecord?.generationIntent).toBeNull()
+  const originalCells = generatedRecord?.project?.cells
+  if (!originalCells) throw new Error('Expected persisted Grid cells after Worker success.')
+
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId('picker-color-26').click()
+  await page.getByTestId('picker-close').click()
+  await page.getByTestId('viewport-reset').click()
+  await page.getByTestId('viewport-center').click()
+  const canvasBox = await page.getByTestId('editor-canvas').boundingBox()
+  if (!canvasBox) throw new Error('Expected editor Canvas bounds.')
+  await page.keyboard.down('Space')
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(
+    canvasBox.x + canvasBox.width / 2 + 18,
+    canvasBox.y + canvasBox.height / 2 + 10,
+  )
+  await page.mouse.up()
+  await page.keyboard.up('Space')
+  const afterNavigation = await readActiveSessionRecord(page)
+  expect(afterNavigation?.project?.updatedAt).toBe(generatedRecord.project?.updatedAt)
+  expect(afterNavigation?.project?.revision).toBe(generatedRecord.project?.revision)
+  expect(afterNavigation?.project?.cells).toEqual(originalCells)
+  await page.getByTestId('viewport-reset').click()
+  await page.getByTestId('viewport-center').click()
+  const viewport = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const point = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE / 2, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    viewport,
+  )
+  await page.mouse.click(canvasBox.x + point.x, canvasBox.y + point.y)
+  await expect(page.getByTestId('editor-selected-cell')).toContainText('第 1 行、第 1 列')
+  await page.getByTestId('apply-current-color').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  const editedCells = [...originalCells]
+  editedCells[0] = 26
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 1, cells: editedCells } })
+
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 0, cells: originalCells } })
+
+  await page.getByTestId('editor-redo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 1, cells: editedCells } })
+
+  await page.getByTestId('editor-tool-brush').click()
+  const brushCanvas = await page.getByTestId('editor-canvas').boundingBox()
+  if (!brushCanvas) throw new Error('Expected editor Canvas bounds for brush stroke.')
+  const brushViewport = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const brushStart = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE * 1.5, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    brushViewport,
+  )
+  const brushEnd = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE * 2.5, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    brushViewport,
+  )
+  await page.mouse.move(brushCanvas.x + brushStart.x, brushCanvas.y + brushStart.y)
+  await page.mouse.down()
+  await page.mouse.move(brushCanvas.x + brushEnd.x, brushCanvas.y + brushEnd.y)
+  await page.mouse.up()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '2')
+  const brushedCells = [...editedCells]
+  brushedCells[1] = 26
+  brushedCells[2] = 26
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 2, cells: brushedCells } })
+
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 1, cells: editedCells } })
+  await page.getByTestId('editor-redo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '2')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 2, cells: brushedCells } })
+
+  await page.getByTestId('project-name-rename').click()
+  await page.getByTestId('project-name-input').fill('自动保存改名')
+  await page.getByTestId('project-name-confirm').click()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { projectName: '自动保存改名', revision: 2, cells: brushedCells } })
+  const finalRecord = await readActiveSessionRecord(page)
+  expect(finalRecord?.extraKeys).toEqual([
+    'generationIntent',
+    'id',
+    'pendingUpload',
+    'project',
+    'schemaVersion',
+  ])
+  expect(finalRecord?.project?.cellsAreUint16Array).toBe(true)
+})
+
+test('TASK-072 saves only confirmed Crop, width, and generation-mode settings', async ({
+  page,
+}) => {
+  await clearActiveSessionDatabase(page)
+  await uploadCanvasImage(page, 'confirmed-settings.png')
+  await expect(page).toHaveURL(/\/crop$/)
+  await page.getByTestId('crop-rotate-right').click()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: null,
+      pendingUpload: { fileName: 'confirmed-settings.png' },
+    })
+
+  await page.getByTestId('crop-confirm').click()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: {
+        cropRotation: 90,
+        generationWidth: 64,
+        revision: 0,
+      },
+      pendingUpload: null,
+    })
+
+  await page.getByTestId('grid-width-preset-48').click()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: {
+        generationWidth: 48,
+        cropRotation: 90,
+        revision: 0,
+        width: null,
+        height: null,
+      },
+      generationIntent: null,
+    })
+
+  await page.getByTestId('generation-mode-high-fidelity').check()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { generationMode: 'high-fidelity', generationWidth: 48 } })
+  expect((await readActiveSessionRecord(page))?.pendingUpload).toBeNull()
 })

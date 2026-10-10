@@ -128,6 +128,7 @@ describe('TASK-027 crop confirmation boundary', () => {
       scaleY: 1,
     })
     await wrapper.get('[data-testid="crop-confirm"]').trigger('click')
+    await flushPromises()
 
     const projectStore = useProjectStore(pinia)
     expect(projectStore.currentProject?.crop).toEqual({

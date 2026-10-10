@@ -20,6 +20,7 @@ import { renameProject as renameProjectDomain } from '../../domain/project/name'
 import { applyGridOperation as applyProjectGridOperation } from '../../domain/project/operations'
 import type { GridOperation } from '../../domain/project/operations'
 import type { Grid } from '../../domain/project/grid'
+import { autoSaveCoordinator } from '../../storage/auto-save-coordinator'
 import {
   createGridHistoryEntry,
   MAX_GRID_HISTORY_ENTRIES,
@@ -57,6 +58,8 @@ export const useProjectStore = defineStore('project', () => {
   let requestProject: Project | null = null
   let activeRequest: ProjectGenerationRequest | null = null
   let workerClient: GenerationWorkerClient | null = null
+  let activeGenerationIntentId: string | null = null
+  let generationIntentPersistence: Promise<boolean> = Promise.resolve(true)
 
   function sameCrop(left: Project['crop'], right: Project['crop']): boolean {
     return (
@@ -138,6 +141,7 @@ export const useProjectStore = defineStore('project', () => {
     }
 
     const previousProject = currentProject.value
+    const invalidatedIntentId = activeGenerationIntentId
     if (!compatibleGridLineage(currentProject.value, project)) clearHistory()
     if (previousProject?.projectId !== project?.projectId || !project?.grid) {
       useEditorStore().setHighlightedPaletteIndex(null)
@@ -147,6 +151,14 @@ export const useProjectStore = defineStore('project', () => {
     generationStatus.value = 'idle'
     generationError.value = null
     clearGenerationRequest()
+    if (invalidatedIntentId) {
+      activeGenerationIntentId = null
+      if (project) {
+        void autoSaveCoordinator.saveProject(project, { immediate: true })
+      } else {
+        void autoSaveCoordinator.clearGenerationIntent(invalidatedIntentId)
+      }
+    }
   }
 
   function clearCurrentProject() {
@@ -169,7 +181,15 @@ export const useProjectStore = defineStore('project', () => {
     // The request's formal generation inputs are unchanged; keep its live Project token aligned
     // so a successful in-flight Worker commit includes the latest metadata.
     if (requestProject === project) requestProject = renamed
+    void autoSaveCoordinator.saveProject(renamed)
     return true
+  }
+
+  function persistCurrentProject(immediate = true): Promise<boolean> {
+    const project = currentProject.value
+    return project
+      ? autoSaveCoordinator.saveProject(project, { immediate })
+      : Promise.resolve(false)
   }
 
   /**
@@ -208,6 +228,7 @@ export const useProjectStore = defineStore('project', () => {
       revision: result.project.revision,
       basisProject: result.project,
     }
+    void autoSaveCoordinator.saveProject(result.project)
     return true
   }
 
@@ -239,6 +260,7 @@ export const useProjectStore = defineStore('project', () => {
       basisProject: restored,
     }
     useEditorStore().markHistoryRestore()
+    void autoSaveCoordinator.saveProject(restored)
     return true
   }
 
@@ -270,6 +292,7 @@ export const useProjectStore = defineStore('project', () => {
       basisProject: restored,
     }
     useEditorStore().markHistoryRestore()
+    void autoSaveCoordinator.saveProject(restored)
     return true
   }
 
@@ -304,6 +327,11 @@ export const useProjectStore = defineStore('project', () => {
     generationError.value = null
     requestProject = currentProject.value
     activeRequest = generationRequest
+    activeGenerationIntentId = `generation-${currentProject.value.projectId}-${requestId}`
+    generationIntentPersistence = autoSaveCoordinator.startGeneration(
+      currentProject.value,
+      activeGenerationIntentId,
+    )
     return requestId
   }
 
@@ -326,6 +354,10 @@ export const useProjectStore = defineStore('project', () => {
     if (!matches) {
       generationStatus.value = 'idle'
       generationError.value = null
+      if (activeGenerationIntentId) {
+        void autoSaveCoordinator.clearGenerationIntent(activeGenerationIntentId)
+      }
+      activeGenerationIntentId = null
       clearGenerationRequest()
     }
     return matches
@@ -349,6 +381,12 @@ export const useProjectStore = defineStore('project', () => {
       )
       clearHistory()
       useEditorStore().setHighlightedPaletteIndex(null)
+      if (activeGenerationIntentId) {
+        void autoSaveCoordinator.finishGeneration(currentProject.value, activeGenerationIntentId)
+      } else {
+        void autoSaveCoordinator.saveProject(currentProject.value, { immediate: true })
+      }
+      activeGenerationIntentId = null
       generationStatus.value = 'success'
       generationError.value = null
       clearGenerationRequest()
@@ -356,6 +394,10 @@ export const useProjectStore = defineStore('project', () => {
     } catch (error) {
       generationStatus.value = 'error'
       generationError.value = error instanceof Error ? error.message : '拼豆图生成失败'
+      if (activeGenerationIntentId) {
+        void autoSaveCoordinator.clearGenerationIntent(activeGenerationIntentId)
+      }
+      activeGenerationIntentId = null
       clearGenerationRequest()
       throw error
     }
@@ -368,6 +410,10 @@ export const useProjectStore = defineStore('project', () => {
 
     generationStatus.value = 'error'
     generationError.value = error instanceof Error ? error.message : '拼豆图生成失败'
+    if (activeGenerationIntentId) {
+      void autoSaveCoordinator.clearGenerationIntent(activeGenerationIntentId)
+    }
+    activeGenerationIntentId = null
     clearGenerationRequest()
     return true
   }
@@ -382,6 +428,10 @@ export const useProjectStore = defineStore('project', () => {
 
     generationStatus.value = 'idle'
     generationError.value = null
+    if (activeGenerationIntentId) {
+      void autoSaveCoordinator.clearGenerationIntent(activeGenerationIntentId)
+    }
+    activeGenerationIntentId = null
     clearGenerationRequest()
     workerClient?.cancel()
     return true
@@ -392,6 +442,8 @@ export const useProjectStore = defineStore('project', () => {
     let requestId: number | null = null
     try {
       requestId = beginGeneration()
+      // Persistence failure is surfaced globally but must not discard the user's in-memory work.
+      await generationIntentPersistence
       const request = activeRequest!
       const rasterized = await rasterizeCrop(request)
       if (!isCurrentGenerationRequest(requestId)) {
@@ -441,6 +493,7 @@ export const useProjectStore = defineStore('project', () => {
     undo,
     redo,
     clearHistory,
+    persistCurrentProject,
     prepareGenerationRequest,
     beginGeneration,
     isCurrentGenerationRequest,

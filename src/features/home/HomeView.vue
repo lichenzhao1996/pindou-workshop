@@ -81,6 +81,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUploadStore } from '../../app/stores/uploadStore'
+import { autoSaveCoordinator } from '../../storage/auto-save-coordinator'
 import { inspectImageInput } from '../upload'
 
 const steps = [
@@ -103,6 +104,8 @@ const uploadStore = useUploadStore()
 const fileInput = ref<HTMLInputElement | null>(null)
 const errorMessage = ref<string | null>(null)
 const isDragging = ref(false)
+let inspectionSequence = 0
+let uploadSequence = 0
 
 function openFilePicker() {
   fileInput.value?.click()
@@ -112,7 +115,10 @@ async function processSelectedFile(
   selectedFile: Blob | null,
   originalFileNameOverride?: string | null,
 ) {
+  if (!selectedFile) return
+  const inspectionToken = ++inspectionSequence
   const inspection = await inspectImageInput(selectedFile, originalFileNameOverride)
+  if (inspectionToken !== inspectionSequence) return
   if (!inspection) {
     return
   }
@@ -123,7 +129,21 @@ async function processSelectedFile(
   }
 
   errorMessage.value = null
-  uploadStore.setPendingInput(inspection.input, inspection.warnings, inspection.dimensions)
+  const uploadId = `upload-${Date.now()}-${++uploadSequence}`
+  uploadStore.setPendingInput(
+    inspection.input,
+    inspection.warnings,
+    inspection.dimensions,
+    uploadId,
+  )
+  await autoSaveCoordinator.stagePendingUpload(uploadId, {
+    originalImage: inspection.input.originalImage,
+    originalFileName: inspection.input.originalFileName,
+    mimeType: inspection.input.mimeType,
+    originalWidth: inspection.dimensions.width,
+    originalHeight: inspection.dimensions.height,
+  })
+  if (inspectionToken !== inspectionSequence || uploadStore.pendingUploadId !== uploadId) return
   await router.push({ name: 'crop' })
 }
 
@@ -190,6 +210,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  inspectionSequence += 1
   window.removeEventListener('paste', handlePaste)
 })
 </script>
