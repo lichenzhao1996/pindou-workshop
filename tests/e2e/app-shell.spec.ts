@@ -473,7 +473,9 @@ test('pastes a supported PNG through the home entry', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '确认图片范围' })).toBeVisible()
 })
 
-test('continues to the crop route while showing a low-resolution warning', async ({ page }) => {
+test('TASK-023/091 continues to crop while showing a non-blocking low-resolution warning', async ({
+  page,
+}) => {
   await page.goto('/')
   await page.setInputFiles('[data-testid="image-file-input"]', {
     name: 'tiny.png',
@@ -681,7 +683,7 @@ for (const mode of ['optimized', 'high-fidelity'] as const) {
   })
 }
 
-test('TASK-037 mode confirmation preserves edits on cancel and regenerates from the original PNG on confirm', async ({
+test('TASK-037/091 mode confirmation preserves edits on cancel and regenerates from the original PNG on confirm', async ({
   page,
 }) => {
   await uploadGenerationFixture(page)
@@ -3389,7 +3391,7 @@ test('TASK-084/086/087/088 exports real production pages, exact ranges, thumbnai
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
 })
 
-test('TASK-085 warns about small manually selected cells but still exports with confirmed counts', async ({
+test('TASK-085/091 warns about small manually selected cells but still exports with confirmed counts', async ({
   page,
 }) => {
   await clearActiveSessionDatabase(page)

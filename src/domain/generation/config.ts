@@ -3,6 +3,22 @@ export const MAX_GRID_WIDTH = 256
 export const DEFAULT_GRID_WIDTH = 64
 export const QUICK_GRID_WIDTHS = [32, 48, 64, 96] as const
 export const BEAD_SIZE_MM = 2.6
+export const LARGE_IMAGE_PIXEL_WARNING_THRESHOLD = 24_000_000
+export const LARGE_IMAGE_DIMENSION_WARNING_THRESHOLD = 8192
+export const LARGE_IMAGE_PREPROCESS_DIMENSION_THRESHOLD = 4096
+
+/** Large uploads keep their original Project source but skip a full-size RGBA copy. */
+export function shouldPreprocessLargeImage(width: number, height: number): boolean {
+  if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) {
+    return false
+  }
+
+  const pixelCount = width * height
+  return (
+    !Number.isSafeInteger(pixelCount) ||
+    Math.max(width, height) > LARGE_IMAGE_PREPROCESS_DIMENSION_THRESHOLD
+  )
+}
 
 /** The product-wide extreme aspect warning is non-blocking. */
 export const EXTREME_ASPECT_RATIO_WARNING_THRESHOLD = 4

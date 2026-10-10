@@ -122,6 +122,10 @@ describe('TASK-028 generation settings', () => {
     expect(wrapper.get('[data-testid="grid-width-error"]').text()).toContain('8～256')
     expect(wrapper.get('[data-testid="crop-confirm"]').attributes('disabled')).toBeDefined()
 
+    await input.setValue('257')
+    expect(wrapper.get('[data-testid="grid-width-error"]').text()).toContain('8～256')
+    expect(wrapper.get('[data-testid="crop-confirm"]').attributes('disabled')).toBeDefined()
+
     await input.setValue('8')
     expect(wrapper.find('[data-testid="grid-width-error"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="grid-bead-dimensions"]').text()).toContain('8 × 6 颗')

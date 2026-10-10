@@ -24,7 +24,7 @@ import HomeView from '../../src/features/home/HomeView.vue'
 import { createImageInput } from '../../src/features/upload'
 
 const generationMock = vi.hoisted(() => ({
-  rasterizeCrop: vi.fn(),
+  rasterizeLargeCropForGeneration: vi.fn(),
   generateGrid: vi.fn(),
   cancel: vi.fn(),
 }))
@@ -33,7 +33,7 @@ const cropperMock = vi.hoisted(() => ({ instances: [] as { emitCrop(data: object
 
 vi.mock('../../src/domain/generation/rasterize', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/domain/generation/rasterize')>()),
-  rasterizeCrop: generationMock.rasterizeCrop,
+  rasterizeLargeCropForGeneration: generationMock.rasterizeLargeCropForGeneration,
 }))
 
 vi.mock('../../src/domain/generation/worker-client', async (importOriginal) => ({
@@ -179,10 +179,10 @@ async function mountCropView(pinia: ReturnType<typeof createPinia>) {
 
 beforeEach(() => {
   cropperMock.instances.length = 0
-  generationMock.rasterizeCrop.mockReset()
+  generationMock.rasterizeLargeCropForGeneration.mockReset()
   generationMock.generateGrid.mockReset()
   generationMock.cancel.mockReset()
-  generationMock.rasterizeCrop.mockResolvedValue({
+  generationMock.rasterizeLargeCropForGeneration.mockResolvedValue({
     width: 2,
     height: 2,
     data: new Uint8ClampedArray([255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255]),
@@ -205,7 +205,7 @@ describe('TASK-037 Crop generation flow', () => {
 
     expect(wrapper.get('[data-testid="generate"]').attributes('disabled')).toBeDefined()
     await wrapper.get('[data-testid="generate"]').trigger('click')
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
 
     await wrapper.get('[data-testid="crop-confirm"]').trigger('click')
     expect(useProjectStore(pinia).currentProject).not.toBeNull()
@@ -216,7 +216,7 @@ describe('TASK-037 Crop generation flow', () => {
     const { wrapper } = await mountCropView(createPinia())
     expect(wrapper.get('[data-testid="crop-empty-state"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="generate"]').exists()).toBe(false)
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
   })
 
   it('rejects invalid width input without mutating the confirmed Project', async () => {
@@ -227,7 +227,7 @@ describe('TASK-037 Crop generation flow', () => {
     expect(wrapper.get('[data-testid="grid-width-error"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="generate"]').attributes('disabled')).toBeDefined()
     expect(projectStore.currentProject).toBe(project)
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
   })
 
   it('runs rasterize and Worker generation with a snapshot of the formal Project', async () => {
@@ -249,10 +249,10 @@ describe('TASK-037 Crop generation flow', () => {
       heightBeads: 72,
       mode: 'optimized',
     })
-    expect(generationMock.rasterizeCrop).toHaveBeenCalledExactlyOnceWith(request)
+    expect(generationMock.rasterizeLargeCropForGeneration).toHaveBeenCalledExactlyOnceWith(request)
     expect(generationMock.generateGrid).toHaveBeenCalledExactlyOnceWith(
       request,
-      await generationMock.rasterizeCrop.mock.results[0]!.value,
+      await generationMock.rasterizeLargeCropForGeneration.mock.results[0]!.value,
     )
     expect(projectStore.currentProject).toBe(configuredProject)
     expect(router.currentRoute.value.name).toBe('crop')
@@ -501,7 +501,9 @@ describe('TASK-037 Crop generation flow', () => {
   it('shows decode errors without sending Worker work, mutating Project or navigating', async () => {
     const { pinia, projectStore, project } = projectFixture({ edited: true })
     const { wrapper, router } = await mountCropView(pinia)
-    generationMock.rasterizeCrop.mockRejectedValueOnce(new Error('original image decode failed'))
+    generationMock.rasterizeLargeCropForGeneration.mockRejectedValueOnce(
+      new Error('original image decode failed'),
+    )
     await wrapper.get('[data-testid="generate"]').trigger('click')
     await flushPromises()
 
@@ -518,7 +520,7 @@ describe('TASK-037 Crop generation flow', () => {
     const { pinia, projectStore, project } = projectFixture({ edited: true })
     const { wrapper, router } = await mountCropView(pinia)
     const decode = deferred<RgbaImage>()
-    generationMock.rasterizeCrop.mockReturnValueOnce(decode.promise)
+    generationMock.rasterizeLargeCropForGeneration.mockReturnValueOnce(decode.promise)
     await wrapper.get('[data-testid="generate"]').trigger('click')
     await wrapper.get('[data-testid="generation-cancel"]').trigger('click')
     decode.resolve({ width: 1, height: 1, data: new Uint8ClampedArray([255, 0, 0, 255]) })
@@ -535,8 +537,8 @@ describe('TASK-037 Crop generation flow', () => {
     const { wrapper, router } = await mountCropView(pinia)
     const oldDecode = deferred<RgbaImage>()
     const latestDecode = deferred<RgbaImage>()
-    generationMock.rasterizeCrop.mockReturnValueOnce(oldDecode.promise)
-    generationMock.rasterizeCrop.mockReturnValueOnce(latestDecode.promise)
+    generationMock.rasterizeLargeCropForGeneration.mockReturnValueOnce(oldDecode.promise)
+    generationMock.rasterizeLargeCropForGeneration.mockReturnValueOnce(latestDecode.promise)
     const response = pendingWorker()
     await wrapper.get('[data-testid="generate"]').trigger('click')
     const latestAttempt = projectStore.generateCurrentProject()
@@ -626,7 +628,7 @@ describe('TASK-037 generation mode confirmation', () => {
     expect(request.heightBeads).toBe(48)
     expect(request.mode).toBe('high-fidelity')
     expect(projectStore.currentProject?.crop).toBe(project.crop)
-    expect(generationMock.rasterizeCrop).toHaveBeenCalledExactlyOnceWith(request)
+    expect(generationMock.rasterizeLargeCropForGeneration).toHaveBeenCalledExactlyOnceWith(request)
     response.resolve({ accepted: true, generationResult: workerResult(request) })
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('editor')
@@ -640,14 +642,14 @@ describe('TASK-037 generation mode confirmation', () => {
       '切换模式会重新生成作品，当前手动修改会被清除。',
     )
     expect(projectStore.currentProject).toBe(project)
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
 
     await wrapper.get('[data-testid="generation-mode-cancel"]').trigger('click')
 
     expect(projectStore.currentProject).toBe(project)
     expect(projectStore.currentProject?.grid).toBe(project.grid)
     expect(wrapper.find('[data-testid="generation-mode-confirmation"]').exists()).toBe(false)
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
     expect(router.currentRoute.value.name).toBe('crop')
   })
 
@@ -723,7 +725,7 @@ describe('TASK-037 generation mode confirmation', () => {
     expect(projectStore.currentProject).toBe(project)
     expect(projectStore.currentProject?.grid).toBe(project.grid)
     expect(wrapper.find('[data-testid="generation-mode-confirmation"]').exists()).toBe(false)
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
     expect(generationMock.generateGrid).not.toHaveBeenCalled()
   })
 
@@ -735,12 +737,12 @@ describe('TASK-037 generation mode confirmation', () => {
 
     expect(projectStore.currentProject).toBe(project)
     expect(wrapper.find('[data-testid="generation-mode-confirmation"]').exists()).toBe(false)
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
     await wrapper.get('[data-testid="crop-confirm"]').trigger('click')
     expect(projectStore.currentProject?.projectId).not.toBe(project.projectId)
     expect(projectStore.currentProject?.source.originalImage).toBe(newInput.originalImage)
     expect(projectStore.currentProject?.generation.mode).toBe('high-fidelity')
     expect(projectStore.currentProject?.grid).toBeNull()
-    expect(generationMock.rasterizeCrop).not.toHaveBeenCalled()
+    expect(generationMock.rasterizeLargeCropForGeneration).not.toHaveBeenCalled()
   })
 })

@@ -8,7 +8,7 @@ import {
   type ProjectGenerationRequest,
   type GenerationResult,
 } from '../../domain/generation'
-import { rasterizeCrop } from '../../domain/generation/rasterize'
+import { rasterizeLargeCropForGeneration } from '../../domain/generation/rasterize'
 import {
   createGenerationWorkerClient,
   GenerationRequestCancelledError,
@@ -474,7 +474,7 @@ export const useProjectStore = defineStore('project', () => {
       // Persistence failure is surfaced globally but must not discard the user's in-memory work.
       await generationIntentPersistence
       const request = activeRequest!
-      const rasterized = await rasterizeCrop(request)
+      const rasterized = await rasterizeLargeCropForGeneration(request)
       if (!isCurrentGenerationRequest(requestId)) {
         return false
       }

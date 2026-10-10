@@ -87,7 +87,7 @@ function buildGenerationResult(
     algorithmVersion: request.algorithmVersion,
     diagnostics: {
       sourceSize,
-      cropSize: { width: rasterized.width, height: rasterized.height },
+      cropSize: rasterized.cropSize ?? { width: rasterized.width, height: rasterized.height },
       elapsedMs: Math.max(0, Date.now() - startedAt),
     },
   }
@@ -123,7 +123,7 @@ export function generateGenerationResultFromRgbaImage(
   return buildGenerationResult(
     request,
     rasterized,
-    { width: rasterized.width, height: rasterized.height },
+    rasterized.sourceSize ?? { width: rasterized.width, height: rasterized.height },
     options,
     startedAt,
   )

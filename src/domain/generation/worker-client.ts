@@ -75,6 +75,13 @@ export function createGenerationWorkerRequest(
 }
 
 function isRgbaImage(value: unknown): value is RgbaImage {
+  const isSize = (size: unknown) =>
+    isRecord(size) &&
+    Number.isSafeInteger(size.width) &&
+    (size.width as number) > 0 &&
+    Number.isSafeInteger(size.height) &&
+    (size.height as number) > 0
+
   return (
     isRecord(value) &&
     Number.isSafeInteger(value.width) &&
@@ -82,7 +89,9 @@ function isRgbaImage(value: unknown): value is RgbaImage {
     Number.isSafeInteger(value.height) &&
     (value.height as number) > 0 &&
     value.data instanceof Uint8ClampedArray &&
-    value.data.length === (value.width as number) * (value.height as number) * 4
+    value.data.length === (value.width as number) * (value.height as number) * 4 &&
+    (value.sourceSize === undefined || isSize(value.sourceSize)) &&
+    (value.cropSize === undefined || isSize(value.cropSize))
   )
 }
 

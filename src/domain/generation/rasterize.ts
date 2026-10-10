@@ -1,10 +1,16 @@
 import type { CropRotation, CropState } from '../project/types'
-import type { GenerationRequest } from './request'
+import { shouldPreprocessLargeImage } from './config'
+import { deriveGenerationDimensions } from './dimensions'
+import type { GenerationRequest, ProjectGenerationRequest } from './request'
 
 export interface RgbaImage {
   readonly width: number
   readonly height: number
   readonly data: Uint8ClampedArray
+  /** Original natural image dimensions, set only when a large source was preprocessed. */
+  readonly sourceSize?: Readonly<{ width: number; height: number }>
+  /** Original crop dimensions after rotation, before bead-grid downsampling. */
+  readonly cropSize?: Readonly<{ width: number; height: number }>
 }
 
 export type ImageRgbaDecoder = (blob: Blob) => Promise<RgbaImage>
@@ -25,7 +31,7 @@ function assertRgbaImage(image: RgbaImage): void {
   }
 }
 
-function assertCropWithinImage(crop: CropState, image: RgbaImage): void {
+function assertCropWithinImage(crop: CropState, image: Pick<RgbaImage, 'width' | 'height'>): void {
   const values = [crop.x, crop.y, crop.width, crop.height, crop.aspectRatio]
   if (values.some((value) => !Number.isFinite(value))) {
     throw new RangeError('crop values must be finite')
@@ -174,4 +180,160 @@ export async function rasterizeCrop(
 ): Promise<RgbaImage> {
   const source = await decode(request.originalImage)
   return rasterizeRgbaImage(source, request.crop)
+}
+
+interface ImageDrawableWithCleanup {
+  readonly drawable: CanvasImageSource
+  readonly dispose: () => void
+}
+
+async function loadHtmlImageDrawable(blob: Blob): Promise<ImageDrawableWithCleanup> {
+  if (typeof Image === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    throw new Error('当前环境不支持图片解码')
+  }
+
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error('图片解码失败'))
+      element.src = objectUrl
+    })
+    return { drawable: image, dispose: () => URL.revokeObjectURL(objectUrl) }
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl)
+    throw error
+  }
+}
+
+function prepareRotationTransform(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  rotation: CropRotation,
+): void {
+  switch (rotation) {
+    case 90:
+      context.translate(width, 0)
+      context.rotate(Math.PI / 2)
+      break
+    case 180:
+      context.translate(width, height)
+      context.rotate(Math.PI)
+      break
+    case 270:
+      context.translate(0, height)
+      context.rotate(-Math.PI / 2)
+      break
+    default:
+      break
+  }
+}
+
+/**
+ * For sources that cross the documented large-image warning threshold, draw only
+ * the confirmed crop into the final bead-sized raster. This avoids allocating a
+ * full-resolution Uint8ClampedArray and a second full crop copy on the main thread.
+ */
+export async function rasterizeLargeCropForGeneration(
+  request: ProjectGenerationRequest,
+): Promise<RgbaImage> {
+  const sourceSize = {
+    width: request.source.originalWidth,
+    height: request.source.originalHeight,
+  }
+  if (!shouldPreprocessLargeImage(sourceSize.width, sourceSize.height)) {
+    return rasterizeCrop(request)
+  }
+
+  assertCropWithinImage(request.crop, { width: sourceSize.width, height: sourceSize.height })
+  const cropX = Math.floor(request.crop.x)
+  const cropY = Math.floor(request.crop.y)
+  const cropRight = Math.ceil(request.crop.x + request.crop.width)
+  const cropBottom = Math.ceil(request.crop.y + request.crop.height)
+  const cropWidth = cropRight - cropX
+  const cropHeight = cropBottom - cropY
+  const dimensions = deriveGenerationDimensions(request.widthBeads, request.crop)
+  if (dimensions.heightBeads !== request.heightBeads) {
+    throw new RangeError('generation dimensions do not match the confirmed crop')
+  }
+
+  const targetWidth = dimensions.widthBeads
+  const targetHeight = dimensions.heightBeads
+  const rotatedCropWidth =
+    request.crop.rotation === 90 || request.crop.rotation === 270 ? targetHeight : targetWidth
+  const rotatedCropHeight =
+    request.crop.rotation === 90 || request.crop.rotation === 270 ? targetWidth : targetHeight
+  const canvas = createCanvas(targetWidth, targetHeight)
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('当前环境无法创建 Canvas 2D 上下文')
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  prepareRotationTransform(context, targetWidth, targetHeight, request.crop.rotation)
+
+  let bitmap: ImageBitmap | null = null
+  let fallback: ImageDrawableWithCleanup | null = null
+  try {
+    if (typeof globalThis.createImageBitmap === 'function') {
+      try {
+        bitmap = await globalThis.createImageBitmap(
+          request.originalImage,
+          cropX,
+          cropY,
+          cropWidth,
+          cropHeight,
+          {
+            resizeWidth: rotatedCropWidth,
+            resizeHeight: rotatedCropHeight,
+            resizeQuality: 'high',
+          },
+        )
+        context.drawImage(bitmap, 0, 0, rotatedCropWidth, rotatedCropHeight)
+      } catch {
+        bitmap?.close()
+        bitmap = null
+        fallback = await loadHtmlImageDrawable(request.originalImage)
+        context.drawImage(
+          fallback.drawable,
+          cropX,
+          cropY,
+          cropWidth,
+          cropHeight,
+          0,
+          0,
+          rotatedCropWidth,
+          rotatedCropHeight,
+        )
+      }
+    } else {
+      fallback = await loadHtmlImageDrawable(request.originalImage)
+      context.drawImage(
+        fallback.drawable,
+        cropX,
+        cropY,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        rotatedCropWidth,
+        rotatedCropHeight,
+      )
+    }
+
+    const imageData = context.getImageData(0, 0, targetWidth, targetHeight)
+    const cropSize = getRotatedSize(cropRight - cropX, cropBottom - cropY, request.crop.rotation)
+    return {
+      width: targetWidth,
+      height: targetHeight,
+      data: new Uint8ClampedArray(imageData.data),
+      sourceSize,
+      cropSize,
+    }
+  } finally {
+    bitmap?.close()
+    fallback?.dispose()
+    canvas.width = 0
+    canvas.height = 0
+  }
 }

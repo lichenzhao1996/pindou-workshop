@@ -1,4 +1,8 @@
-import { EXTREME_ASPECT_RATIO_WARNING_THRESHOLD } from '../../domain/generation/config'
+import {
+  EXTREME_ASPECT_RATIO_WARNING_THRESHOLD,
+  LARGE_IMAGE_DIMENSION_WARNING_THRESHOLD,
+  LARGE_IMAGE_PIXEL_WARNING_THRESHOLD,
+} from '../../domain/generation/config'
 
 const SUPPORTED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
 
@@ -51,8 +55,6 @@ const MIME_TYPE_BY_EXTENSION: Record<string, SupportedImageMimeType> = {
 }
 
 const LOW_RESOLUTION_THRESHOLD = 128
-const LARGE_IMAGE_PIXEL_THRESHOLD = 24_000_000
-const LARGE_IMAGE_DIMENSION_THRESHOLD = 8192
 function mimeTypeFromFileName(fileName: string): SupportedImageMimeType | null {
   const extension = fileName.slice(fileName.lastIndexOf('.')).toLowerCase()
   return MIME_TYPE_BY_EXTENSION[extension] ?? null
@@ -133,8 +135,8 @@ export function inspectImageDimensions(
   }
 
   if (
-    pixelCount > LARGE_IMAGE_PIXEL_THRESHOLD ||
-    Math.max(width, height) > LARGE_IMAGE_DIMENSION_THRESHOLD
+    pixelCount > LARGE_IMAGE_PIXEL_WARNING_THRESHOLD ||
+    Math.max(width, height) > LARGE_IMAGE_DIMENSION_WARNING_THRESHOLD
   ) {
     warnings.push({
       code: 'large-image',
