@@ -3068,3 +3068,112 @@ test('TASK-078 downloads a valid effect preview PNG for the real Worker Project'
   expect(png.readUInt32BE(16)).toBe(32 * 32 + 32 * 2)
   expect(png.readUInt32BE(20)).toBe(24 * 32 + 32 * 2 + 76)
 })
+
+test('TASK-079 downloads a production reference PNG from the real Worker Grid', async ({
+  page,
+}) => {
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const project = await assertCommittedGrid(page, 32, 24, generationStartedAt)
+  const gridBeforeExport = await page
+    .getByTestId('editor-grid')
+    .getAttribute('data-palette-indices')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-reference-png').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('task037-local_32x24.png')
+  const path = await download.path()
+  if (!path) throw new Error('Expected the reference PNG download to have a file path.')
+  const { readFile } = await import('node:fs/promises')
+  const png = await readFile(path)
+  expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  expect(png.toString('ascii', 12, 16)).toBe('IHDR')
+  const imageWidth = png.readUInt32BE(16)
+  const imageHeight = png.readUInt32BE(20)
+  expect(imageWidth).toBeGreaterThan(32 * 32)
+  expect(imageHeight).toBeGreaterThan(24 * 32)
+
+  const firstEntry = MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === project.first)
+  const lastEntry = MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === project.last)
+  if (!firstEntry || !lastEntry)
+    throw new Error('Expected Worker palette entries in the MARD palette')
+  const samplePixels = await page.evaluate(
+    async ({ encoded, points }) => {
+      const binary = atob(encoded)
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+      const canvas = document.createElement('canvas')
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const context = canvas.getContext('2d')!
+      context.drawImage(bitmap, 0, 0)
+      const pixels = points.map(({ x, y }) => Array.from(context.getImageData(x, y, 1, 1).data))
+      bitmap.close()
+      return pixels
+    },
+    {
+      encoded: png.toString('base64'),
+      points: [
+        { x: 44 + 4, y: 88 + 36 + 4 },
+        { x: 44 + 31 * 32 + 4, y: 88 + 36 + 4 },
+      ],
+    },
+  )
+  const expectedRgb = [firstEntry, lastEntry].map((entry) => [
+    entry.rgb.r,
+    entry.rgb.g,
+    entry.rgb.b,
+  ])
+  expect(samplePixels.map((pixel) => pixel.slice(0, 3))).toEqual(expectedRgb)
+  expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
+    gridBeforeExport,
+  )
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+})
+
+test('TASK-081 embeds Chinese text in a downloadable PDF from the real Worker Project', async ({
+  page,
+}) => {
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const project = await assertCommittedGrid(page, 32, 24, generationStartedAt)
+  const gridBeforeExport = await page
+    .getByTestId('editor-grid')
+    .getAttribute('data-palette-indices')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-pdf-base').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('task037-local_32x24.pdf')
+  const path = await download.path()
+  if (!path) throw new Error('Expected the PDF download to have a file path.')
+  const { readFile } = await import('node:fs/promises')
+  const pdfBytes = await readFile(path)
+  expect(pdfBytes.subarray(0, 5).toString('ascii')).toBe('%PDF-')
+
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
+  expect(pdf.numPages).toBe(1)
+  const pageText = await pdf.getPage(1).then((pdfPage) => pdfPage.getTextContent())
+  const extractedText = pageText.items
+    .filter((item) => 'str' in item)
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ')
+  expect(extractedText).toContain('拼豆工坊 PDF 字体嵌入样例')
+  expect(extractedText).toContain('作品名称：task037-local')
+  const usedColor = MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === project.first)
+  if (!usedColor) throw new Error('Expected a real MARD color in the generated Grid')
+  expect(extractedText).toContain(usedColor.displayCode)
+  expect(extractedText).toContain(usedColor.name)
+  expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
+    gridBeforeExport,
+  )
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+})

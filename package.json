@@ -22,7 +22,9 @@
     "check": "npm run lint && npm run format:check && npm run test && npm run test:unit && npm run test:component && npm run type-check && npm run build && npm run test:e2e && npm run smoke"
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "cropperjs": "^1.6.2",
+    "pdf-lib": "^1.17.1",
     "pinia": "^4.0.3",
     "vue": "^3.5.41",
     "vue-router": "^5.2.0"
@@ -39,6 +41,7 @@
     "fake-indexeddb": "^6.2.5",
     "globals": "^17.11.0",
     "happy-dom": "^20.11.6",
+    "pdfjs-dist": "^6.4.299",
     "prettier": "^3.9.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.67.0",

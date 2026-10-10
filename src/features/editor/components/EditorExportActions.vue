@@ -8,6 +8,22 @@
     >
       {{ isExporting ? '正在生成 PNG…' : '导出效果预览 PNG' }}
     </button>
+    <button
+      type="button"
+      data-testid="export-reference-png"
+      :disabled="!project?.grid || isExporting"
+      @click="exportReferencePng"
+    >
+      {{ isExporting ? '正在生成 PNG…' : '导出制作参考 PNG' }}
+    </button>
+    <button
+      type="button"
+      data-testid="export-pdf-base"
+      :disabled="!project?.grid || isExporting"
+      @click="exportPdfBase"
+    >
+      {{ isExporting ? '正在生成 PDF…' : '导出 PDF 基础样例' }}
+    </button>
     <p v-if="exportError" role="alert" data-testid="export-error">{{ exportError }}</p>
   </section>
 </template>
@@ -16,6 +32,7 @@
 import { ref } from 'vue'
 import type { Project } from '../../../domain/project/types'
 import { downloadEffectPreviewPng } from '../../export/png/effect-preview'
+import { downloadReferencePng } from '../../export/png/reference-guide'
 import { createExportSnapshot } from '../../export/snapshot'
 
 const props = defineProps<{ project: Project | null }>()
@@ -33,6 +50,42 @@ async function exportEffectPreview() {
     await downloadEffectPreviewPng(snapshot)
   } catch {
     exportError.value = '效果预览 PNG 导出失败，请稍后重试。'
+  } finally {
+    isExporting.value = false
+  }
+}
+
+async function exportReferencePng() {
+  const project = props.project
+  if (!project?.grid || isExporting.value) return
+
+  isExporting.value = true
+  exportError.value = ''
+  try {
+    const snapshot = createExportSnapshot(project)
+    await downloadReferencePng(snapshot)
+  } catch {
+    exportError.value = '制作参考 PNG 导出失败，请稍后重试。'
+  } finally {
+    isExporting.value = false
+  }
+}
+
+async function exportPdfBase() {
+  const project = props.project
+  if (!project?.grid || isExporting.value) return
+
+  isExporting.value = true
+  exportError.value = ''
+  try {
+    const snapshot = createExportSnapshot(project)
+    const { downloadPdfFontSample } = await import('../../export/pdf/font-sample')
+    await downloadPdfFontSample(snapshot)
+  } catch (error) {
+    exportError.value =
+      error instanceof Error && error.name === 'PdfChineseFontError'
+        ? error.message
+        : 'PDF 基础样例生成失败，请稍后重试。'
   } finally {
     isExporting.value = false
   }
