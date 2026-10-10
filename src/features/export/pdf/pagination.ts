@@ -27,6 +27,12 @@ export interface PdfPaginationPlan {
   readonly marginsMm: number
   readonly contentWidthMm: number
   readonly contentHeightMm: number
+  readonly gridAreaWidthMm: number
+  readonly gridAreaHeightMm: number
+  readonly coordinateGutterMm: number
+  readonly headerMm: number
+  readonly coordinateHeaderMm: number
+  readonly footerMm: number
   readonly targetCellMm: number
   readonly cellSizeMm: number
   readonly labelFontSizePt: number
@@ -50,18 +56,23 @@ function createCandidate(
   orientation: Exclude<PdfOrientation, 'auto'>,
 ): PaginationCandidate {
   const geometry = derivePdfPageGeometry(input, orientation)
+  const coordinateGutterMm = input.showCoordinates ? 7 : 0
+  const headerMm = 25
+  const coordinateHeaderMm = input.showCoordinates ? 5 : 0
+  const footerMm = 5
+  const gridAreaWidthMm = geometry.contentWidthMm - coordinateGutterMm
+  const gridAreaHeightMm = geometry.contentHeightMm - headerMm - coordinateHeaderMm - footerMm
+  if (gridAreaWidthMm <= 0 || gridAreaHeightMm <= 0) {
+    throw new RangeError('PDF chart annotations leave no printable Grid area')
+  }
   const columnsPerPage =
-    input.manualCells?.columns ?? Math.floor(geometry.contentWidthMm / input.targetCellMm)
-  const rowsPerPage =
-    input.manualCells?.rows ?? Math.floor(geometry.contentHeightMm / input.targetCellMm)
+    input.manualCells?.columns ?? Math.floor(gridAreaWidthMm / input.targetCellMm)
+  const rowsPerPage = input.manualCells?.rows ?? Math.floor(gridAreaHeightMm / input.targetCellMm)
   if (columnsPerPage < 1 || rowsPerPage < 1) {
     throw new RangeError('PDF target cell size does not fit inside the A4 printable area')
   }
 
-  const cellSizeMm = Math.min(
-    geometry.contentWidthMm / columnsPerPage,
-    geometry.contentHeightMm / rowsPerPage,
-  )
+  const cellSizeMm = Math.min(gridAreaWidthMm / columnsPerPage, gridAreaHeightMm / rowsPerPage)
   const pageColumns = Math.ceil(grid.width / columnsPerPage)
   const pageRows = Math.ceil(grid.height / rowsPerPage)
   const estimatedPageCount = pageColumns * pageRows
@@ -88,6 +99,12 @@ function createCandidate(
     marginsMm: input.marginsMm,
     contentWidthMm: geometry.contentWidthMm,
     contentHeightMm: geometry.contentHeightMm,
+    gridAreaWidthMm,
+    gridAreaHeightMm,
+    coordinateGutterMm,
+    headerMm,
+    coordinateHeaderMm,
+    footerMm,
     targetCellMm: input.targetCellMm,
     cellSizeMm,
     labelFontSizePt: derivePdfLabelFontSizePt(cellSizeMm),
@@ -168,6 +185,12 @@ export function recommendPdfPagination(
     marginsMm: selected.marginsMm,
     contentWidthMm: selected.contentWidthMm,
     contentHeightMm: selected.contentHeightMm,
+    gridAreaWidthMm: selected.gridAreaWidthMm,
+    gridAreaHeightMm: selected.gridAreaHeightMm,
+    coordinateGutterMm: selected.coordinateGutterMm,
+    headerMm: selected.headerMm,
+    coordinateHeaderMm: selected.coordinateHeaderMm,
+    footerMm: selected.footerMm,
     targetCellMm: selected.targetCellMm,
     cellSizeMm: selected.cellSizeMm,
     labelFontSizePt: selected.labelFontSizePt,

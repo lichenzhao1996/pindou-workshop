@@ -29,6 +29,69 @@
       </div>
     </dl>
 
+    <div class="pdf-display-options" data-testid="pdf-display-options">
+      <label class="pdf-option">
+        <input
+          data-testid="pdf-show-grid"
+          type="checkbox"
+          :checked="settings.showGrid"
+          @change="updateBooleanSetting('showGrid', $event)"
+        />
+        网格
+      </label>
+      <label class="pdf-option">
+        <input
+          data-testid="pdf-show-coordinates"
+          type="checkbox"
+          :checked="settings.showCoordinates"
+          @change="updateBooleanSetting('showCoordinates', $event)"
+        />
+        行列坐标
+      </label>
+      <label class="pdf-option">
+        <input
+          data-testid="pdf-show-ten-cell-guides"
+          type="checkbox"
+          :checked="settings.showTenCellGuides"
+          @change="updateBooleanSetting('showTenCellGuides', $event)"
+        />
+        每 10 格粗线
+      </label>
+      <label class="pdf-option">
+        <input
+          data-testid="pdf-show-labels"
+          type="checkbox"
+          :checked="settings.showLabels"
+          :disabled="settings.colorMode === 'monochrome'"
+          @change="updateBooleanSetting('showLabels', $event)"
+        />
+        色号
+      </label>
+      <label class="pdf-option">
+        <input
+          data-testid="pdf-include-materials"
+          type="checkbox"
+          :checked="settings.includeMaterials"
+          @change="updateBooleanSetting('includeMaterials', $event)"
+        />
+        材料清单
+      </label>
+      <label class="pdf-color-mode">
+        颜色模式
+        <select
+          data-testid="pdf-color-mode"
+          :value="settings.colorMode"
+          @change="updateColorMode($event)"
+        >
+          <option value="color">彩色</option>
+          <option value="monochrome">黑白</option>
+        </select>
+      </label>
+      <p v-if="settings.colorMode === 'monochrome'" class="pdf-mode-note">
+        黑白图纸必须保留色号以区分颜色。
+      </p>
+    </div>
+
     <div v-if="plan" class="pagination-settings" data-testid="pdf-pagination-settings">
       <label>
         每页横向格数
@@ -78,39 +141,64 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Grid } from '../../../domain/project/grid'
-import { createDefaultPdfLayoutInput, type PdfManualCells } from '../../export/pdf/layout'
+import {
+  createDefaultPdfExportSettings,
+  createDefaultPdfLayoutInput,
+  type PdfExportSettings,
+  type PdfManualCells,
+} from '../../export/pdf/layout'
 import { recommendPdfPagination } from '../../export/pdf/pagination'
 
 const props = withDefaults(
   defineProps<{
     grid?: Pick<Grid, 'width' | 'height'> | null
     manualCells?: PdfManualCells | null
+    settings?: PdfExportSettings
   }>(),
-  { grid: null, manualCells: null },
+  { grid: null, manualCells: null, settings: undefined },
 )
-const emit = defineEmits<{ 'update:manualCells': [value: PdfManualCells | null] }>()
+const emit = defineEmits<{
+  'update:manualCells': [value: PdfManualCells | null]
+  'update:settings': [value: PdfExportSettings]
+}>()
 
-const input = createDefaultPdfLayoutInput()
+const settings = computed(() => props.settings ?? createDefaultPdfExportSettings())
+const input = computed(() => ({ ...createDefaultPdfLayoutInput(), ...settings.value }))
 const columnsInvalid = ref(false)
 const rowsInvalid = ref(false)
 const inputError = ref('')
 const automaticPlan = computed(() =>
-  props.grid ? recommendPdfPagination(props.grid, input) : null,
+  props.grid ? recommendPdfPagination(props.grid, input.value) : null,
 )
 const plan = computed(() => {
   if (!props.grid) return null
   return recommendPdfPagination(props.grid, {
-    ...input,
+    ...input.value,
     manualCells: props.manualCells ?? null,
   })
 })
 const readabilityWarning = computed(() => {
   if (!plan.value) return ''
-  const belowMinimum = plan.value.cellSizeMm < input.readableCellMmRange.min
+  const belowMinimum = plan.value.cellSizeMm < input.value.readableCellMmRange.min
   const labelTooSmall = plan.value.labelFontSizePt <= 4
   if (!belowMinimum && !labelTooSmall) return ''
   return `可读性警告：当前单格 ${plan.value.cellSizeMm.toFixed(2)} mm，色号可能较难辨认；`
 })
+
+function updateBooleanSetting(key: Exclude<keyof PdfExportSettings, 'colorMode'>, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  emit('update:settings', { ...settings.value, [key]: checked })
+}
+
+function updateColorMode(event: Event) {
+  const colorMode = (event.target as HTMLSelectElement).value
+  if (colorMode !== 'color' && colorMode !== 'monochrome') return
+  emit('update:settings', {
+    ...settings.value,
+    colorMode,
+    showLabels: colorMode === 'monochrome' ? true : settings.value.showLabels,
+  })
+}
 
 function parsePositiveInteger(event: Event): number | null {
   const value = Number((event.target as HTMLInputElement).value)
@@ -171,6 +259,30 @@ dl,
   display: grid;
   gap: var(--space-2);
   margin: 0;
+}
+
+.pdf-display-options {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.pdf-option {
+  justify-content: start;
+}
+
+.pdf-option input {
+  width: auto;
+  margin: 0;
+}
+
+.pdf-color-mode select {
+  min-width: 7rem;
+}
+
+.pdf-mode-note {
+  color: var(--color-text-secondary);
 }
 
 dl > div {

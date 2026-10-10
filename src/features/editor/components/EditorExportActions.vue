@@ -18,21 +18,17 @@
     </button>
     <button
       type="button"
-      data-testid="export-pdf-base"
+      data-testid="export-pdf"
       :disabled="!project?.grid || isExporting"
-      @click="exportPdfOverview"
+      @click="exportPdf"
     >
-      {{ isExporting ? '正在生成 PDF…' : '导出 PDF 总览页' }}
+      {{ isExporting ? '正在生成 PDF…' : '导出完整制作 PDF' }}
     </button>
-    <button
-      type="button"
-      data-testid="export-pdf-pagination-preview"
-      :disabled="!project?.grid || isExporting"
-      @click="exportPdfPaginationPreview"
-    >
-      {{ isExporting ? '正在生成 PDF…' : '导出 PDF 分页预览' }}
-    </button>
-    <PdfLayoutSummary v-model:manual-cells="manualCells" :grid="project?.grid ?? null" />
+    <PdfLayoutSummary
+      v-model:manual-cells="manualCells"
+      v-model:settings="pdfSettings"
+      :grid="project?.grid ?? null"
+    />
     <p v-if="exportError" role="alert" data-testid="export-error">{{ exportError }}</p>
   </section>
 </template>
@@ -44,9 +40,10 @@ import { downloadEffectPreviewPng } from '../../export/png/effect-preview'
 import { downloadReferencePng } from '../../export/png/reference-guide'
 import { createExportSnapshot } from '../../export/snapshot'
 import {
-  PDF_MANUAL_COLUMNS_EXPORT_OPTION,
-  PDF_MANUAL_ROWS_EXPORT_OPTION,
+  createDefaultPdfExportSettings,
+  createPdfExportOptions,
   type PdfManualCells,
+  type PdfExportSettings,
 } from '../../export/pdf/layout'
 import PdfLayoutSummary from './PdfLayoutSummary.vue'
 
@@ -54,11 +51,13 @@ const props = defineProps<{ project: Project | null }>()
 const isExporting = ref(false)
 const exportError = ref('')
 const manualCells = ref<PdfManualCells | null>(null)
+const pdfSettings = ref<PdfExportSettings>(createDefaultPdfExportSettings())
 
 watch(
   () => props.project?.projectId,
   () => {
     manualCells.value = null
+    pdfSettings.value = createDefaultPdfExportSettings()
   },
 )
 
@@ -94,44 +93,24 @@ async function exportReferencePng() {
   }
 }
 
-async function exportPdfOverview() {
+async function exportPdf() {
   const project = props.project
   if (!project?.grid || isExporting.value) return
 
   isExporting.value = true
   exportError.value = ''
   try {
-    const snapshot = createExportSnapshot(project)
-    const { downloadPdfOverview } = await import('../../export/pdf/overview')
-    await downloadPdfOverview(snapshot)
+    const snapshot = createExportSnapshot(
+      project,
+      createPdfExportOptions(pdfSettings.value, manualCells.value),
+    )
+    const { downloadPdfProduction } = await import('../../export/pdf/production')
+    await downloadPdfProduction(snapshot)
   } catch (error) {
     exportError.value =
       error instanceof Error && error.name === 'PdfChineseFontError'
         ? error.message
-        : 'PDF 基础样例生成失败，请稍后重试。'
-  } finally {
-    isExporting.value = false
-  }
-}
-
-async function exportPdfPaginationPreview() {
-  const project = props.project
-  if (!project?.grid || isExporting.value) return
-
-  isExporting.value = true
-  exportError.value = ''
-  try {
-    const snapshot = createExportSnapshot(project, {
-      [PDF_MANUAL_COLUMNS_EXPORT_OPTION]: manualCells.value?.columns ?? null,
-      [PDF_MANUAL_ROWS_EXPORT_OPTION]: manualCells.value?.rows ?? null,
-    })
-    const { downloadPdfPaginationPreview } = await import('../../export/pdf/pagination-preview')
-    await downloadPdfPaginationPreview(snapshot)
-  } catch (error) {
-    exportError.value =
-      error instanceof Error && error.name === 'PdfChineseFontError'
-        ? error.message
-        : 'PDF 分页预览生成失败，请稍后重试。'
+        : '完整 PDF 导出失败，请稍后重试。'
   } finally {
     isExporting.value = false
   }

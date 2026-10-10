@@ -30,6 +30,16 @@ export interface PdfLayoutInput {
   readonly manualCells: PdfManualCells | null
 }
 
+export type PdfExportSettings = Pick<
+  PdfLayoutInput,
+  | 'showGrid'
+  | 'showLabels'
+  | 'showCoordinates'
+  | 'showTenCellGuides'
+  | 'includeMaterials'
+  | 'colorMode'
+>
+
 export interface PdfPageGeometry {
   readonly orientation: Exclude<PdfOrientation, 'auto'>
   readonly pageWidthMm: number
@@ -56,6 +66,12 @@ export const PDF_DEFAULT_LAYOUT_INPUT: PdfLayoutInput = Object.freeze({
 
 export const PDF_MANUAL_COLUMNS_EXPORT_OPTION = 'pdfManualColumnsPerPage'
 export const PDF_MANUAL_ROWS_EXPORT_OPTION = 'pdfManualRowsPerPage'
+export const PDF_SHOW_GRID_EXPORT_OPTION = 'pdfShowGrid'
+export const PDF_SHOW_LABELS_EXPORT_OPTION = 'pdfShowLabels'
+export const PDF_SHOW_COORDINATES_EXPORT_OPTION = 'pdfShowCoordinates'
+export const PDF_SHOW_TEN_CELL_GUIDES_EXPORT_OPTION = 'pdfShowTenCellGuides'
+export const PDF_INCLUDE_MATERIALS_EXPORT_OPTION = 'pdfIncludeMaterials'
+export const PDF_COLOR_MODE_EXPORT_OPTION = 'pdfColorMode'
 
 export function createDefaultPdfLayoutInput(): PdfLayoutInput {
   return {
@@ -64,26 +80,95 @@ export function createDefaultPdfLayoutInput(): PdfLayoutInput {
   }
 }
 
+export function createDefaultPdfExportSettings(): PdfExportSettings {
+  const { showGrid, showLabels, showCoordinates, showTenCellGuides, includeMaterials, colorMode } =
+    PDF_DEFAULT_LAYOUT_INPUT
+  return { showGrid, showLabels, showCoordinates, showTenCellGuides, includeMaterials, colorMode }
+}
+
+export function createPdfExportOptions(
+  settings: PdfExportSettings,
+  manualCells: PdfManualCells | null,
+): Readonly<Record<string, string | number | boolean | null>> {
+  return {
+    [PDF_MANUAL_COLUMNS_EXPORT_OPTION]: manualCells?.columns ?? null,
+    [PDF_MANUAL_ROWS_EXPORT_OPTION]: manualCells?.rows ?? null,
+    [PDF_SHOW_GRID_EXPORT_OPTION]: settings.showGrid,
+    [PDF_SHOW_LABELS_EXPORT_OPTION]: settings.showLabels,
+    [PDF_SHOW_COORDINATES_EXPORT_OPTION]: settings.showCoordinates,
+    [PDF_SHOW_TEN_CELL_GUIDES_EXPORT_OPTION]: settings.showTenCellGuides,
+    [PDF_INCLUDE_MATERIALS_EXPORT_OPTION]: settings.includeMaterials,
+    [PDF_COLOR_MODE_EXPORT_OPTION]: settings.colorMode,
+  }
+}
+
+function readBooleanExportOption(
+  snapshot: ExportSnapshot,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = snapshot.exportOptions[key]
+  if (value === undefined) return fallback
+  if (typeof value !== 'boolean') throw new RangeError(`PDF option ${key} must be boolean`)
+  return value
+}
+
 /** Applies only pagination settings explicitly confirmed into the immutable export snapshot. */
 export function createPdfLayoutInputFromSnapshot(snapshot: ExportSnapshot): PdfLayoutInput {
   const input = createDefaultPdfLayoutInput()
+  const colorMode = snapshot.exportOptions[PDF_COLOR_MODE_EXPORT_OPTION]
+  if (colorMode !== undefined && colorMode !== 'color' && colorMode !== 'monochrome') {
+    throw new RangeError('PDF color mode must be color or monochrome')
+  }
   const columns = snapshot.exportOptions[PDF_MANUAL_COLUMNS_EXPORT_OPTION]
   const rows = snapshot.exportOptions[PDF_MANUAL_ROWS_EXPORT_OPTION]
-  if (columns === undefined && rows === undefined) return input
-  if (columns === null && rows === null) return input
-  if (
-    typeof columns !== 'number' ||
-    !Number.isSafeInteger(columns) ||
-    columns <= 0 ||
-    typeof rows !== 'number' ||
-    !Number.isSafeInteger(rows) ||
-    rows <= 0
-  ) {
-    throw new RangeError(
-      'Confirmed PDF pagination settings must contain positive integer columns and rows',
-    )
+  let manualCells = input.manualCells
+  if (columns !== undefined || rows !== undefined) {
+    if (columns === null && rows === null) {
+      manualCells = null
+    } else {
+      if (
+        typeof columns !== 'number' ||
+        !Number.isSafeInteger(columns) ||
+        columns <= 0 ||
+        typeof rows !== 'number' ||
+        !Number.isSafeInteger(rows) ||
+        rows <= 0
+      ) {
+        throw new RangeError(
+          'Confirmed PDF pagination settings must contain positive integer columns and rows',
+        )
+      }
+      manualCells = { columns, rows }
+    }
   }
-  return { ...input, manualCells: { columns, rows } }
+  const showLabels = readBooleanExportOption(
+    snapshot,
+    PDF_SHOW_LABELS_EXPORT_OPTION,
+    input.showLabels,
+  )
+  return {
+    ...input,
+    showGrid: readBooleanExportOption(snapshot, PDF_SHOW_GRID_EXPORT_OPTION, input.showGrid),
+    showLabels: colorMode === 'monochrome' ? true : showLabels,
+    showCoordinates: readBooleanExportOption(
+      snapshot,
+      PDF_SHOW_COORDINATES_EXPORT_OPTION,
+      input.showCoordinates,
+    ),
+    showTenCellGuides: readBooleanExportOption(
+      snapshot,
+      PDF_SHOW_TEN_CELL_GUIDES_EXPORT_OPTION,
+      input.showTenCellGuides,
+    ),
+    includeMaterials: readBooleanExportOption(
+      snapshot,
+      PDF_INCLUDE_MATERIALS_EXPORT_OPTION,
+      input.includeMaterials,
+    ),
+    colorMode: colorMode === undefined ? input.colorMode : colorMode,
+    manualCells,
+  }
 }
 
 export function assertValidPdfLayoutInput(input: PdfLayoutInput): void {

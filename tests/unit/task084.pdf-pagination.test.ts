@@ -7,14 +7,12 @@ describe('TASK-084 automatic PDF pagination recommendation', () => {
     const input = createDefaultPdfLayoutInput()
     const wide = recommendPdfPagination({ width: 64, height: 48 }, input)
     const tall = recommendPdfPagination({ width: 48, height: 64 }, input)
-
-    expect(wide.orientation).toBe('landscape')
+    expect(wide.orientation).toBe('portrait')
     expect(tall.orientation).toBe('portrait')
     expect(wide.cellSizeMm).toBeGreaterThanOrEqual(5)
     expect(wide.cellSizeMm).toBeLessThanOrEqual(7)
     expect(wide.readability).toBe('within-range')
-    expect(wide.columnsPerPage).not.toBe(40)
-    expect(wide.rowsPerPage).not.toBe(40)
+    expect([wide.columnsPerPage, wide.rowsPerPage]).not.toEqual([40, 40])
   })
 
   it('covers small and large Grids with repeatable page counts and half-open ranges', () => {
@@ -36,8 +34,8 @@ describe('TASK-084 automatic PDF pagination recommendation', () => {
     const first = recommendPdfPagination(grid)
     const second = recommendPdfPagination(grid)
     expect(first).toEqual(second)
-    expect(first.estimatedPageCount).toBe(4)
-    expect(first.pages).toHaveLength(4)
+    expect(first.estimatedPageCount).toBe(6)
+    expect(first.pages).toHaveLength(6)
 
     const coverage = new Uint8Array(grid.width * grid.height)
     for (const page of first.pages) {
@@ -49,14 +47,14 @@ describe('TASK-084 automatic PDF pagination recommendation', () => {
     }
     expect(coverage.every((count) => count === 1)).toBe(true)
     expect(first.pages.at(-1)).toMatchObject({
-      rowStart: 31,
+      rowStart: 40,
       rowEndExclusive: 48,
-      columnStart: 46,
+      columnStart: 60,
       columnEndExclusive: 64,
     })
 
     const maximum = recommendPdfPagination({ width: 256, height: 192 })
-    expect(maximum.estimatedPageCount).toBe(42)
+    expect(maximum.estimatedPageCount).toBe(45)
     expect(maximum.pages[0]?.rowStart).toBe(0)
     expect(maximum.pages.at(-1)?.rowEndExclusive).toBe(192)
     expect(maximum.pages.at(-1)?.columnEndExclusive).toBe(256)

@@ -8,11 +8,11 @@ describe('TASK-085 manual PDF pagination settings', () => {
       props: { grid: { width: 64, height: 48 }, manualCells: null },
     })
 
-    expect(wrapper.get('[data-testid="pdf-pagination-estimate"]').text()).toContain('预计 4 页')
+    expect(wrapper.get('[data-testid="pdf-pagination-estimate"]').text()).toContain('预计 6 页')
     await wrapper.get('[data-testid="pdf-manual-columns"]').setValue('70')
-    expect(wrapper.emitted('update:manualCells')?.at(-1)?.[0]).toEqual({ columns: 70, rows: 31 })
+    expect(wrapper.emitted('update:manualCells')?.at(-1)?.[0]).toEqual({ columns: 70, rows: 40 })
 
-    await wrapper.setProps({ manualCells: { columns: 70, rows: 31 } })
+    await wrapper.setProps({ manualCells: { columns: 70, rows: 40 } })
     await wrapper.get('[data-testid="pdf-manual-rows"]').setValue('60')
     expect(wrapper.emitted('update:manualCells')?.at(-1)?.[0]).toEqual({ columns: 70, rows: 60 })
 

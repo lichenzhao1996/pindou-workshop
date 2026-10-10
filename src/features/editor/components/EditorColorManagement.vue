@@ -5,6 +5,75 @@
       {{ materialView?.usedColorCount ?? 0 }} / 291 种颜色 ·
       {{ materialView?.totalBeads ?? 0 }} 颗拼豆
     </p>
+    <section class="optimization-suggestions" data-testid="color-optimization-suggestions">
+      <h4>颜色优化建议</h4>
+      <section aria-label="相近颜色合并建议" data-testid="similar-color-suggestions">
+        <h5>相近颜色组合</h5>
+        <p data-testid="similar-color-suggestion-count">
+          {{ optimizationSuggestions.similarColors.length }} 组 · 按 ΔE76 从近到远
+        </p>
+        <article
+          v-for="(suggestion, index) in optimizationSuggestions.similarColors"
+          :key="`similar-${suggestion.source.paletteIndex}-${suggestion.target.paletteIndex}`"
+          class="optimization-suggestion"
+          :data-testid="`similar-color-suggestion-${index}`"
+        >
+          <span>
+            {{ suggestion.source.displayCode }}（{{ suggestion.sourceCount }} 颗）→
+            {{ suggestion.target.displayCode }}（{{ suggestion.targetCount }} 颗）
+          </span>
+          <span>ΔE76 {{ suggestion.distance.toFixed(2) }}</span>
+          <button
+            type="button"
+            :data-testid="`similar-color-preview-${suggestion.source.paletteIndex}-${suggestion.target.paletteIndex}`"
+            @click="
+              beginSuggestedReplacement(
+                suggestion.source.paletteIndex,
+                suggestion.target.paletteIndex,
+              )
+            "
+          >
+            预览此组
+          </button>
+        </article>
+        <p v-if="!optimizationSuggestions.similarColors.length" class="muted">
+          至少使用两种颜色后显示相近颜色组合。
+        </p>
+      </section>
+      <section aria-label="少量颜色使用提示" data-testid="low-usage-suggestions">
+        <h5>少量颜色提示</h5>
+        <p data-testid="low-usage-suggestion-count">
+          {{ optimizationSuggestions.lowUsageColors.length }} 种颜色使用量低于 10 颗
+        </p>
+        <article
+          v-for="suggestion in optimizationSuggestions.lowUsageColors"
+          :key="`low-${suggestion.source.paletteIndex}`"
+          class="optimization-suggestion"
+          :data-testid="`low-usage-suggestion-${suggestion.source.paletteIndex}`"
+        >
+          <span>
+            {{ suggestion.source.displayCode }}：{{ suggestion.sourceCount }} 颗；相近已用颜色
+            {{ suggestion.target.displayCode }}（{{ suggestion.targetCount }} 颗）
+          </span>
+          <button
+            type="button"
+            :data-testid="`low-usage-preview-${suggestion.source.paletteIndex}`"
+            @click="
+              beginSuggestedReplacement(
+                suggestion.source.paletteIndex,
+                suggestion.target.paletteIndex,
+              )
+            "
+          >
+            预览合并
+          </button>
+        </article>
+        <p v-if="usedRows.length && !optimizationSuggestions.lowUsageColors.length" class="muted">
+          当前没有使用量低于 10 颗的颜色。
+        </p>
+      </section>
+      <p class="muted">建议不会自动修改作品；选择后仍需预览并确认，可撤销。</p>
+    </section>
     <label for="used-color-search">搜索已使用颜色</label>
     <input
       id="used-color-search"
@@ -174,6 +243,7 @@ import type { Grid } from '../../../domain/project/grid'
 import type { Project } from '../../../domain/project/types'
 import type { ReplacementPreview } from '../replacement-preview'
 import type { MaterialStatsView } from '../materials/material-stats-view'
+import { deriveColorOptimizationSuggestions } from '../color-optimization'
 import { filterUsedColorRows, sortUsedColorRows, type UsedColorSort } from '../color-management'
 import UnifiedColorPicker from './UnifiedColorPicker.vue'
 
@@ -185,6 +255,7 @@ const searchQuery = ref('')
 const sortOrder = ref<UsedColorSort>('count')
 const fullMaterialsOpen = ref(false)
 const usedRows = computed(() => props.materialView?.rows ?? [])
+const optimizationSuggestions = computed(() => deriveColorOptimizationSuggestions(usedRows.value))
 const visibleRows = computed(() =>
   sortUsedColorRows(filterUsedColorRows(usedRows.value, searchQuery.value), sortOrder.value),
 )
@@ -249,7 +320,7 @@ function cancelReplacement() {
   replacementMessage.value = ''
 }
 
-function beginReplacement(sourceIndex: number) {
+function beginReplacement(sourceIndex: number, targetIndex: number | null = null) {
   const current = projectStore.currentProject
   const grid = current?.grid
   if (
@@ -263,10 +334,18 @@ function beginReplacement(sourceIndex: number) {
   }
   replacementOpen.value = true
   sourcePaletteIndex.value = sourceIndex
-  targetPaletteIndex.value = null
+  targetPaletteIndex.value =
+    targetIndex !== null && getPaletteEntryByIndex(MARD_291_PALETTE, targetIndex)
+      ? targetIndex
+      : null
   snapshot.value = { projectId: current.projectId, grid }
   replacementMessage.value = ''
-  emit('replacement-preview', null)
+  if (targetPaletteIndex.value !== null) publishPreview()
+  else emit('replacement-preview', null)
+}
+
+function beginSuggestedReplacement(sourceIndex: number, targetIndex: number) {
+  beginReplacement(sourceIndex, targetIndex)
 }
 
 function publishPreview() {
@@ -363,6 +442,41 @@ onBeforeUnmount(() => emit('replacement-preview', null))
   display: grid;
   gap: var(--space-2);
   margin-bottom: var(--space-4);
+}
+
+.optimization-suggestions {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.optimization-suggestions h4,
+.optimization-suggestions h5 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.optimization-suggestions h5 {
+  margin-top: var(--space-1);
+}
+
+.optimization-suggestion {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.optimization-suggestion button {
+  justify-self: start;
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--color-action);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-background);
+  color: var(--color-action);
+  cursor: pointer;
 }
 
 h3 {

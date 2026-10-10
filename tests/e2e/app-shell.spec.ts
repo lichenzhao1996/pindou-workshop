@@ -4,6 +4,8 @@ import { MARD_291_PALETTE } from '../../src/domain/palette/mard291'
 import { DEFAULT_ALGORITHM_VERSION } from '../../src/domain/project/constants'
 import type { Project } from '../../src/domain/project/types'
 import { CELL_SIZE, GRID_AXIS_MARGIN, worldToScreen } from '../../src/rendering/viewport'
+import { createDefaultPdfLayoutInput } from '../../src/features/export/pdf/layout'
+import { recommendPdfPagination } from '../../src/features/export/pdf/pagination'
 
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -3149,7 +3151,7 @@ test('TASK-079 downloads a production reference PNG from the real Worker Grid', 
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
 })
 
-test('TASK-081/082 exports a real PDF overview with Chinese and formal ProjectStats', async ({
+test('TASK-081/082/088 exports a complete PDF with overview, production grid, and materials', async ({
   page,
 }) => {
   await clearActiveSessionDatabase(page)
@@ -3161,9 +3163,19 @@ test('TASK-081/082 exports a real PDF overview with Chinese and formal ProjectSt
   const gridBeforeExport = await page
     .getByTestId('editor-grid')
     .getAttribute('data-palette-indices')
+  for (const testId of [
+    'pdf-show-grid',
+    'pdf-show-labels',
+    'pdf-show-coordinates',
+    'pdf-show-ten-cell-guides',
+    'pdf-include-materials',
+  ]) {
+    await expect(page.getByTestId(testId)).toBeChecked()
+  }
+  await expect(page.getByTestId('pdf-color-mode')).toHaveValue('color')
 
   const downloadPromise = page.waitForEvent('download')
-  await page.getByTestId('export-pdf-base').click()
+  await page.getByTestId('export-pdf').click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe('task037-local_32x24.pdf')
   const path = await download.path()
@@ -3174,7 +3186,8 @@ test('TASK-081/082 exports a real PDF overview with Chinese and formal ProjectSt
 
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
-  expect(pdf.numPages).toBe(1)
+  const plan = recommendPdfPagination({ width: 32, height: 24 }, createDefaultPdfLayoutInput())
+  expect(pdf.numPages).toBe(1 + plan.pages.length + 1)
   const pdfOverviewPage = await pdf.getPage(1)
   const overviewViewport = pdfOverviewPage.getViewport({ scale: 1 })
   expect(overviewViewport.width).toBeCloseTo(595.28, 0)
@@ -3206,15 +3219,50 @@ test('TASK-081/082 exports a real PDF overview with Chinese and formal ProjectSt
   const { OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const operators = await pdfOverviewPage.getOperatorList()
   expect(operators.fnArray).toContain(OPS.paintImageXObject)
+  const chartPage = await pdf.getPage(2)
+  const chartText = (await chartPage.getTextContent()).items
+    .filter((item) => 'str' in item)
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ')
+  expect(chartText).toContain('制作图')
+  expect(chartText).toContain('第 2 页')
+  const firstCode = MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === project.first)!
+  expect(chartText).toContain(firstCode.displayCode)
+  expect((await chartPage.getOperatorList()).fnArray).toContain(OPS.paintImageXObject)
   const usedColor = MARD_291_PALETTE.entries.find((entry) => entry.paletteIndex === project.first)
   if (!usedColor) throw new Error('Expected a real MARD color in the generated Grid')
   expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
     gridBeforeExport,
   )
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+
+  await page.getByTestId('pdf-color-mode').selectOption('monochrome')
+  await expect(page.getByTestId('pdf-show-labels')).toBeChecked()
+  await expect(page.getByTestId('pdf-show-labels')).toBeDisabled()
+  const monochromeDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-pdf').click()
+  const monochromeDownload = await monochromeDownloadPromise
+  const monochromePath = await monochromeDownload.path()
+  if (!monochromePath) throw new Error('Expected the monochrome PDF download to have a file path.')
+  const monochromeBytes = await readFile(monochromePath)
+  const monochromePdf = await getDocument({ data: new Uint8Array(monochromeBytes) }).promise
+  expect(monochromePdf.numPages).toBe(1 + plan.pages.length + 1)
+  const monochromeChart = await monochromePdf.getPage(2)
+  const monochromeText = (await monochromeChart.getTextContent()).items
+    .filter((item) => 'str' in item)
+    .map((item) => ('str' in item ? item.str : ''))
+  const chartGridValues = await readCurrentGridCells(page)
+  for (const paletteIndex of new Set(chartGridValues.filter((value) => value !== 0))) {
+    const entry = MARD_291_PALETTE.entries.find((item) => item.paletteIndex === paletteIndex)!
+    expect(monochromeText.filter((text) => text === entry.displayCode).length).toBeGreaterThan(0)
+  }
+  expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
+    gridBeforeExport,
+  )
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
 })
 
-test('TASK-084/086/087 exports PDF ranges with location thumbnails and a matching material list', async ({
+test('TASK-084/086/087/088 exports real production pages, exact ranges, thumbnails, and materials', async ({
   page,
 }) => {
   await clearActiveSessionDatabase(page)
@@ -3228,11 +3276,11 @@ test('TASK-084/086/087 exports PDF ranges with location thumbnails and a matchin
     .getAttribute('data-palette-indices')
 
   const downloadPromise = page.waitForEvent('download')
-  await page.getByTestId('export-pdf-pagination-preview').click()
+  await page.getByTestId('export-pdf').click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe('task037-local_64x48.pdf')
   const path = await download.path()
-  if (!path) throw new Error('Expected the pagination preview PDF to have a file path.')
+  if (!path) throw new Error('Expected the complete PDF download to have a file path.')
   const { readFile } = await import('node:fs/promises')
   const pdfBytes = await readFile(path)
   expect(pdfBytes.subarray(0, 5).toString('ascii')).toBe('%PDF-')
@@ -3241,12 +3289,13 @@ test('TASK-084/086/087 exports PDF ranges with location thumbnails and a matchin
   const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
   const { derivePdfMaterialsRowsPerPage } = await import('../../src/features/export/pdf/materials')
   const gridValues = await readCurrentGridCells(page)
+  const plan = recommendPdfPagination({ width: 64, height: 48 }, createDefaultPdfLayoutInput())
   const usedPaletteIndices = [...new Set(gridValues.filter((paletteIndex) => paletteIndex !== 0))]
   const materialPageCount = Math.max(
     1,
     Math.ceil(usedPaletteIndices.length / derivePdfMaterialsRowsPerPage()),
   )
-  expect(pdf.numPages).toBe(1 + 4 + materialPageCount)
+  expect(pdf.numPages).toBe(1 + plan.pages.length + materialPageCount)
   const overview = await pdf.getPage(1)
   const overviewText = (await overview.getTextContent()).items
     .filter((item) => 'str' in item)
@@ -3255,30 +3304,43 @@ test('TASK-084/086/087 exports PDF ranges with location thumbnails and a matchin
   expect(overviewText).toContain('拼豆作品总览')
   expect(overviewText).toContain('豆数尺寸：64 × 48 颗')
 
-  const expectedRanges = [
-    ['Rows 0-30', 'columns 0-45'],
-    ['Rows 0-30', 'columns 46-63'],
-    ['Rows 31-47', 'columns 0-45'],
-    ['Rows 31-47', 'columns 46-63'],
-  ]
   const { OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  for (let index = 0; index < expectedRanges.length; index += 1) {
+  for (let index = 0; index < plan.pages.length; index += 1) {
+    const range = plan.pages[index]!
     const pdfPage = await pdf.getPage(index + 2)
-    const extractedText = (await pdfPage.getTextContent()).items
+    const textItems = (await pdfPage.getTextContent()).items
       .filter((item) => 'str' in item)
       .map((item) => ('str' in item ? item.str : ''))
-      .join(' ')
-    expect(extractedText).toContain(expectedRanges[index]![0])
-    expect(extractedText).toContain(expectedRanges[index]![1])
+    const extractedText = textItems.join(' ')
+    expect(extractedText).toContain(`制作图 ${index + 1}/${plan.pages.length}`)
+    expect(extractedText).toContain(`行 ${range.rowStart}–${range.rowEndExclusive - 1}`)
+    expect(extractedText).toContain(`列 ${range.columnStart}–${range.columnEndExclusive - 1}`)
     expect(extractedText).toContain(`第 ${index + 2} 页`)
     const viewport = pdfPage.getViewport({ scale: 1 })
-    expect(viewport.width).toBeCloseTo(841.89, 0)
-    expect(viewport.height).toBeCloseTo(595.28, 0)
+    expect(viewport.width).toBeCloseTo((plan.pageWidthMm * 72) / 25.4, 0)
+    expect(viewport.height).toBeCloseTo((plan.pageHeightMm * 72) / 25.4, 0)
     const operators = await pdfPage.getOperatorList()
     expect(operators.fnArray).toContain(OPS.paintImageXObject)
     expect(
       operators.fnArray.filter((operator) => operator === OPS.constructPath).length,
-    ).toBeGreaterThanOrEqual(2)
+    ).toBeGreaterThanOrEqual(
+      (range.rowEndExclusive - range.rowStart) * (range.columnEndExclusive - range.columnStart),
+    )
+    const expectedPageCodes = new Map<string, number>()
+    for (let row = range.rowStart; row < range.rowEndExclusive; row += 1) {
+      for (let column = range.columnStart; column < range.columnEndExclusive; column += 1) {
+        const paletteIndex = gridValues[row * 64 + column]!
+        if (paletteIndex === 0) continue
+        const entry = MARD_291_PALETTE.entries.find((item) => item.paletteIndex === paletteIndex)!
+        expectedPageCodes.set(
+          entry.displayCode,
+          (expectedPageCodes.get(entry.displayCode) ?? 0) + 1,
+        )
+      }
+    }
+    for (const [code, count] of expectedPageCodes) {
+      expect(textItems.filter((text) => text === code)).toHaveLength(count)
+    }
   }
 
   const materialPage = await pdf.getPage(pdf.numPages)
@@ -3344,7 +3406,7 @@ test('TASK-085 warns about small manually selected cells but still exports with 
   await page.getByTestId('pdf-manual-rows').fill('60')
   await expect(page.getByTestId('pdf-pagination-estimate')).toContainText('预计 1 页')
   await expect(page.getByTestId('pdf-readability-warning')).toBeVisible()
-  const exportButton = page.getByTestId('export-pdf-pagination-preview')
+  const exportButton = page.getByTestId('export-pdf')
   await expect(exportButton).toBeEnabled()
 
   const downloadPromise = page.waitForEvent('download')
@@ -3373,11 +3435,189 @@ test('TASK-085 warns about small manually selected cells but still exports with 
     .filter((item) => 'str' in item)
     .map((item) => ('str' in item ? item.str : ''))
     .join(' ')
-  expect(manualText).toContain('每页推荐 70 列 × 60 行')
-  expect(manualText).toContain('Rows 0-47')
-  expect(manualText).toContain('columns 0-63')
+  expect(manualText).toContain('每页 70 列 × 60 行')
+  expect(manualText).toContain('行 0–47')
+  expect(manualText).toContain('列 0–63')
   expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
     gridBeforeExport,
   )
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+})
+
+test('TASK-090 completes upload, generation, editing, materials, and real PNG/PDF downloads', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  const workers: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('worker', (worker) => workers.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-64').click()
+  await expect(page.getByTestId('generation-mode-optimized')).toBeChecked()
+  await expect(page.getByTestId('grid-bead-dimensions')).toContainText('64 × 48 颗')
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 64, 48, generationStartedAt)
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  const readState = () =>
+    page.evaluate(() => {
+      const app = document.querySelector('#app') as HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: {
+              $pinia: {
+                _s: Map<
+                  string,
+                  {
+                    currentProject?: Project
+                    past?: unknown[]
+                    future?: unknown[]
+                  }
+                >
+              }
+            }
+          }
+        }
+      }
+      const stores = app.__vue_app__.config.globalProperties.$pinia._s
+      const project = stores.get('project')!.currentProject!
+      return {
+        projectId: project.projectId,
+        revision: project.revision,
+        updatedAt: project.updatedAt,
+        cells: Array.from(project.grid!.cells),
+        pastLength: stores.get('project')!.past!.length,
+        futureLength: stores.get('project')!.future!.length,
+      }
+    })
+
+  const clickCell = async (row: number, column: number) => {
+    const viewport = await page.evaluate(() => {
+      const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+      return {
+        zoom: Number(area.getAttribute('data-zoom')),
+        panX: Number(area.getAttribute('data-pan-x')),
+        panY: Number(area.getAttribute('data-pan-y')),
+      }
+    })
+    const point = worldToScreen(
+      {
+        x: GRID_AXIS_MARGIN + (column + 0.5) * CELL_SIZE,
+        y: GRID_AXIS_MARGIN + (row + 0.5) * CELL_SIZE,
+      },
+      viewport,
+    )
+    const canvas = await page.getByTestId('editor-canvas').boundingBox()
+    if (!canvas) throw new Error('Expected the production editor canvas bounds.')
+    await page.mouse.click(canvas.x + point.x, canvas.y + point.y)
+  }
+
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-search').fill('A26')
+  await page.getByTestId('picker-color-26').click()
+  await page.getByTestId('picker-close').click()
+  const beforeSingle = await readState()
+  await clickCell(0, 0)
+  await page.getByTestId('apply-current-color').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  const afterSingle = await readState()
+  expect(afterSingle.cells[0]).toBe(26)
+  expect(afterSingle.projectId).toBe(beforeSingle.projectId)
+
+  await page.getByTestId('editor-tool-eraser').click()
+  const beforeErase = await readState()
+  await clickCell(0, 1)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '2')
+  const afterErase = await readState()
+  expect(afterErase.cells[1]).toBe(0)
+  expect(afterErase.projectId).toBe(beforeErase.projectId)
+  await expect(page.getByTestId('used-color-summary')).toBeVisible()
+
+  const sourcePaletteIndex = 35
+  const beforeReplace = await readState()
+  await page.getByTestId(`used-color-replace-${sourcePaletteIndex}`).click()
+  await page.getByTestId('replacement-panel').getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId('picker-color-26').click()
+  await expect(page.getByTestId('replacement-preview')).toContainText('→')
+  const previewState = await readState()
+  expect(previewState.cells).toEqual(beforeReplace.cells)
+  expect(previewState.revision).toBe(beforeReplace.revision)
+  await page.getByTestId('replacement-confirm').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '3')
+  const afterReplace = await readState()
+  expect(afterReplace.cells.filter((value) => value === sourcePaletteIndex)).toHaveLength(0)
+  expect(afterReplace.pastLength).toBe(beforeReplace.pastLength + 1)
+
+  await page.getByTestId('material-list-toggle').click()
+  await expect(page.getByTestId('full-material-list')).toBeVisible()
+  const usedColors = new Map<number, number>()
+  for (const value of afterReplace.cells) {
+    if (value !== 0) usedColors.set(value, (usedColors.get(value) ?? 0) + 1)
+  }
+  await expect(page.locator('[data-testid^="material-list-row-"]')).toHaveCount(usedColors.size)
+  for (const [paletteIndex, count] of usedColors) {
+    await expect(page.getByTestId(`material-list-row-${paletteIndex}`)).toContainText(`${count} 颗`)
+  }
+  await page.getByTestId('material-list-close').click()
+
+  const stateBeforeExports = await readState()
+  const { readFile } = await import('node:fs/promises')
+  const effectDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-effect-preview-png').click()
+  const effectDownload = await effectDownloadPromise
+  expect(effectDownload.suggestedFilename()).toBe('task037-local_64x48.png')
+  const effectPath = await effectDownload.path()
+  if (!effectPath) throw new Error('Expected the effect PNG file to be available.')
+  const effectPng = await readFile(effectPath)
+  expect(effectPng.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  expect(effectPng.readUInt32BE(16)).toBeGreaterThan(0)
+
+  const referenceDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-reference-png').click()
+  const referenceDownload = await referenceDownloadPromise
+  const referencePath = await referenceDownload.path()
+  if (!referencePath) throw new Error('Expected the reference PNG file to be available.')
+  const referencePng = await readFile(referencePath)
+  expect(referencePng.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  expect(referencePng.readUInt32BE(16)).toBeGreaterThan(64 * 24)
+
+  const pdfDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-pdf').click()
+  const pdfDownload = await pdfDownloadPromise
+  expect(pdfDownload.suggestedFilename()).toBe('task037-local_64x48.pdf')
+  const pdfPath = await pdfDownload.path()
+  if (!pdfPath) throw new Error('Expected the production PDF file to be available.')
+  const pdfBytes = await readFile(pdfPath)
+  expect(pdfBytes.subarray(0, 5).toString('ascii')).toBe('%PDF-')
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
+  const plan = recommendPdfPagination({ width: 64, height: 48 }, createDefaultPdfLayoutInput())
+  const { derivePdfMaterialsRowsPerPage } = await import('../../src/features/export/pdf/materials')
+  const materialsPageCount = Math.max(
+    1,
+    Math.ceil(usedColors.size / derivePdfMaterialsRowsPerPage()),
+  )
+  expect(pdf.numPages).toBe(1 + plan.pages.length + materialsPageCount)
+  const allPdfText: string[] = []
+  for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+    const pdfPage = await pdf.getPage(pageIndex)
+    allPdfText.push(
+      ...(await pdfPage.getTextContent()).items
+        .filter((item) => 'str' in item)
+        .map((item) => ('str' in item ? item.str : '')),
+    )
+  }
+  expect(allPdfText.join(' ')).toContain('拼豆作品总览')
+  expect(allPdfText.join(' ')).toContain('制作图')
+  expect(allPdfText.join(' ')).toContain('材料清单')
+  for (const [paletteIndex, count] of usedColors) {
+    const entry = MARD_291_PALETTE.entries.find((item) => item.paletteIndex === paletteIndex)!
+    expect(allPdfText).toContain(entry.displayCode)
+    expect(allPdfText.join(' ')).toContain(String(count))
+  }
+  expect(await readState()).toEqual(stateBeforeExports)
+  expect(errors).toEqual([])
 })
