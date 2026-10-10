@@ -154,6 +154,8 @@ export const useEditorStore = defineStore('editor', () => {
     highlightedPaletteIndex.value = null
     showLabels.value = false
     selectedCell.value = null
+    historyRestoreVersion.value = 0
+    minimapCollapsed.value = false
     isComparingSource.value = false
     zoom.value = 1
     panX.value = 0

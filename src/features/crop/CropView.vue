@@ -236,6 +236,7 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, shallowRef, watch } f
 import { matchedRouteKey, onBeforeRouteLeave, RouterLink, useRouter } from 'vue-router'
 import { useProjectStore } from '../../app/stores/projectStore'
 import { useUploadStore } from '../../app/stores/uploadStore'
+import { resumeDeferredGenerationIntent, sessionRecoveryState } from '../../app/session-recovery'
 import { autoSaveCoordinator } from '../../storage/auto-save-coordinator'
 import {
   DEFAULT_GRID_WIDTH,
@@ -547,6 +548,7 @@ async function confirmCurrentCrop() {
   const input = uploadStore.pendingInput
   const dimensions = uploadStore.pendingDimensions
   const currentCrop = cropState.value
+  const uploadId = uploadStore.pendingUploadId
   if (!input || !dimensions || !currentCrop) {
     return
   }
@@ -569,8 +571,29 @@ async function confirmCurrentCrop() {
         })
   const nextProject = updateProjectGenerationMode(projectWithCropAndSize, selectedMode.value)
 
-  projectStore.setCurrentProject(nextProject)
-  await projectStore.persistCurrentProject(true)
+  if (uploadId) {
+    const saved = await projectStore.commitConfirmedPendingUpload(
+      nextProject,
+      currentProject,
+      uploadId,
+    )
+    if (!saved) {
+      confirmationMessage.value =
+        uploadStore.pendingUploadId === uploadId
+          ? '裁剪确认尚未保存，请检查本地存储后重试。'
+          : '待确认图片已变化，本次裁剪确认未应用。'
+      return
+    }
+    if (uploadStore.pendingInput !== input || uploadStore.pendingUploadId !== uploadId) return
+    uploadStore.setPendingInput(input, uploadStore.pendingWarnings, dimensions, null)
+  } else {
+    projectStore.setCurrentProject(nextProject)
+    const saved = await projectStore.persistCurrentProject(true)
+    if (!saved) {
+      confirmationMessage.value = '裁剪确认尚未保存，请检查本地存储后重试。'
+      return
+    }
+  }
   confirmedPreviewInput.value = {
     originalImage: nextProject.source.originalImage,
     crop: nextProject.crop,
@@ -582,9 +605,31 @@ async function confirmCurrentCrop() {
 async function cancelNewUpload() {
   const uploadId = uploadStore.pendingUploadId
   if (!uploadId) return
-  await autoSaveCoordinator.clearPendingUpload(uploadId)
-  uploadStore.clearPendingInput(uploadId)
-  await router.push({ name: 'home' })
+  const cleared = await autoSaveCoordinator.clearPendingUpload(uploadId)
+  if (!cleared || !uploadStore.clearPendingInput(uploadId)) return
+
+  const project = projectStore.currentProject
+  if (project) {
+    uploadStore.setPendingInput(
+      {
+        originalImage: project.source.originalImage,
+        originalFileName: project.source.originalFileName,
+        mimeType: project.source.mimeType as ImageInput['mimeType'],
+      },
+      [],
+      { width: project.source.originalWidth, height: project.source.originalHeight },
+      null,
+    )
+
+    if (sessionRecoveryState.session?.generationIntent) {
+      const resumed = await resumeDeferredGenerationIntent(() => router.replace({ name: 'editor' }))
+      if (resumed || isGenerating.value) return
+    }
+    if (project.grid) await router.replace({ name: 'editor' })
+    return
+  }
+
+  await router.replace({ name: 'home' })
 }
 
 function cancelCrop() {
@@ -676,8 +721,8 @@ if (inject(matchedRouteKey, undefined)) {
     if (!isNewUnconfirmedUpload.value) return
     const uploadId = uploadStore.pendingUploadId
     if (!uploadId) return
-    await autoSaveCoordinator.clearPendingUpload(uploadId)
-    uploadStore.clearPendingInput(uploadId)
+    const cleared = await autoSaveCoordinator.clearPendingUpload(uploadId)
+    if (cleared) uploadStore.clearPendingInput(uploadId)
   })
 }
 

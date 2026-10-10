@@ -14,7 +14,7 @@ export const useUploadStore = defineStore('upload', () => {
     input: ImageInput,
     warnings: readonly ImageWarning[] = [],
     dimensions: ImageDimensions | null = null,
-    uploadId = `runtime-upload-${++fallbackUploadId}`,
+    uploadId: string | null = `runtime-upload-${++fallbackUploadId}`,
   ) {
     pendingInput.value = input
     pendingDimensions.value = dimensions

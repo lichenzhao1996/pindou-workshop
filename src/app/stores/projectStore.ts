@@ -165,6 +165,19 @@ export const useProjectStore = defineStore('project', () => {
     setCurrentProject(null)
   }
 
+  /** Restores a validated persisted snapshot without saving or creating History. */
+  function hydrateCurrentProject(project: Project | null) {
+    workerClient?.cancel()
+    currentProject.value = project
+    clearHistory()
+    generationStatus.value = 'idle'
+    generationError.value = null
+    activeGenerationIntentId = null
+    generationIntentPersistence = Promise.resolve(true)
+    clearGenerationRequest()
+    useEditorStore().resetEditorState()
+  }
+
   /** Updates only current Project metadata and keeps Grid history/generation intact. */
   function renameProject(
     name: string,
@@ -190,6 +203,18 @@ export const useProjectStore = defineStore('project', () => {
     return project
       ? autoSaveCoordinator.saveProject(project, { immediate })
       : Promise.resolve(false)
+  }
+
+  async function commitConfirmedPendingUpload(
+    project: Project,
+    expectedProject: Project | null,
+    uploadId: string,
+  ): Promise<boolean> {
+    if (currentProject.value !== expectedProject) return false
+    const saved = await autoSaveCoordinator.confirmPendingUpload(project, uploadId)
+    if (!saved || currentProject.value !== expectedProject) return false
+    setCurrentProject(project)
+    return true
   }
 
   /**
@@ -309,7 +334,7 @@ export const useProjectStore = defineStore('project', () => {
     return request
   }
 
-  function beginGeneration(request?: ProjectGenerationRequest) {
+  function beginGeneration(request?: ProjectGenerationRequest, recoveryIntentId?: string) {
     const generationRequest =
       request ?? (currentProject.value ? createGenerationRequest(currentProject.value) : null)
     if (!currentProject.value || !generationRequest) {
@@ -327,10 +352,12 @@ export const useProjectStore = defineStore('project', () => {
     generationError.value = null
     requestProject = currentProject.value
     activeRequest = generationRequest
-    activeGenerationIntentId = `generation-${currentProject.value.projectId}-${requestId}`
+    activeGenerationIntentId =
+      recoveryIntentId ?? `generation-${currentProject.value.projectId}-${requestId}`
     generationIntentPersistence = autoSaveCoordinator.startGeneration(
       currentProject.value,
       activeGenerationIntentId,
+      recoveryIntentId ? { autoRecoveryAttempted: true } : undefined,
     )
     return requestId
   }
@@ -438,10 +465,12 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /** One application path from the formal Project snapshot through the real Worker to commit. */
-  async function generateCurrentProject(): Promise<boolean> {
+  async function generateCurrentProject(
+    options: { recoveryIntentId?: string } = {},
+  ): Promise<boolean> {
     let requestId: number | null = null
     try {
-      requestId = beginGeneration()
+      requestId = beginGeneration(undefined, options.recoveryIntentId)
       // Persistence failure is surfaced globally but must not discard the user's in-memory work.
       await generationIntentPersistence
       const request = activeRequest!
@@ -487,6 +516,7 @@ export const useProjectStore = defineStore('project', () => {
     generationError,
     pendingGenerationRequest,
     setCurrentProject,
+    hydrateCurrentProject,
     clearCurrentProject,
     renameProject,
     applyGridOperation,
@@ -494,6 +524,7 @@ export const useProjectStore = defineStore('project', () => {
     redo,
     clearHistory,
     persistCurrentProject,
+    commitConfirmedPendingUpload,
     prepareGenerationRequest,
     beginGeneration,
     isCurrentGenerationRequest,

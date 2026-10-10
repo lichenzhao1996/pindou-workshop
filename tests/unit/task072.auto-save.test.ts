@@ -215,7 +215,7 @@ describe('TASK-072 active session envelope and auto-save coordination', () => {
     await coordinator.stagePendingUpload('new-upload', next.source)
     statesWritten.length = 0
 
-    expect(await coordinator.saveProject(next, { immediate: true })).toBe(true)
+    expect(await coordinator.confirmPendingUpload(next, 'new-upload')).toBe(true)
     expect(statesWritten).toHaveLength(1)
     expect(statesWritten[0]).toMatchObject({
       project: { projectId: next.projectId },
@@ -225,6 +225,134 @@ describe('TASK-072 active session envelope and auto-save coordination', () => {
     await expect(store.loadActiveSessionState()).resolves.toMatchObject({
       project: { projectId: next.projectId },
       pendingUpload: null,
+    })
+  })
+
+  it('confirms a restored upload by stable ID despite independent IndexedDB Blob clones', async () => {
+    const { indexedDB, databaseName, store } = createTestStore()
+    const previous = createProjectFixture('旧作品')
+    const uploaded = createProjectFixture('恢复后的新作品')
+    await store.saveActiveSession(previous)
+    const stagingCoordinator = createAutoSaveCoordinator(store, 10)
+    await stagingCoordinator.stagePendingUpload('upload-restored-b', uploaded.source)
+
+    const recoveryStore = createActiveSessionStore({ indexedDB, databaseName })
+    const coordinatorStore = createActiveSessionStore({ indexedDB, databaseName })
+    stores.push(recoveryStore, coordinatorStore)
+    const recovered = await recoveryStore.loadActiveSessionState()
+    const coordinatorView = await coordinatorStore.loadActiveSessionState()
+    expect(recovered?.pendingUpload?.source.originalImage).not.toBe(
+      coordinatorView?.pendingUpload?.source.originalImage,
+    )
+
+    const confirmed = { ...uploaded, source: recovered!.pendingUpload!.source }
+    const coordinator = createAutoSaveCoordinator(coordinatorStore, 10)
+    expect(await coordinator.confirmPendingUpload(confirmed, 'upload-restored-b')).toBe(true)
+
+    await expect(store.loadActiveSessionState()).resolves.toMatchObject({
+      project: { projectId: confirmed.projectId },
+      pendingUpload: null,
+    })
+  })
+
+  it('does not let a stale confirmation consume a newer upload with matching file metadata', async () => {
+    const { store } = createTestStore()
+    const coordinator = createAutoSaveCoordinator(store, 10)
+    const previous = createProjectFixture('旧作品')
+    const uploadB = createProjectFixture('同名图片')
+    const uploadC = createProjectFixture('同名图片')
+    await store.saveActiveSession(previous)
+    await coordinator.stagePendingUpload('upload-b', uploadB.source)
+    await coordinator.stagePendingUpload('upload-c', uploadC.source)
+
+    expect(uploadB.source.originalFileName).toBe(uploadC.source.originalFileName)
+    expect(uploadB.source.originalImage.size).toBe(uploadC.source.originalImage.size)
+    expect(
+      await coordinator.confirmPendingUpload(
+        { ...uploadB, source: { ...uploadB.source } },
+        'upload-b',
+      ),
+    ).toBe(false)
+    await expect(store.loadActiveSessionState()).resolves.toMatchObject({
+      project: { projectId: previous.projectId },
+      pendingUpload: { uploadId: 'upload-c' },
+    })
+  })
+
+  it('keeps a newer upload staged while an older confirmation is awaiting its transaction', async () => {
+    const { store } = createTestStore()
+    let beginConfirmationWrite!: () => void
+    let releaseConfirmationWrite!: () => void
+    const confirmationWriteStarted = new Promise<void>((resolve) => {
+      beginConfirmationWrite = resolve
+    })
+    const confirmationWriteGate = new Promise<void>((resolve) => {
+      releaseConfirmationWrite = resolve
+    })
+    let holdConfirmation = false
+    const delayedStore: ActiveSessionStore = {
+      saveActiveSession: (project) => store.saveActiveSession(project),
+      loadActiveSession: () => store.loadActiveSession(),
+      saveActiveSessionState: async (state) => {
+        if (holdConfirmation && state.pendingUpload === null) {
+          beginConfirmationWrite()
+          await confirmationWriteGate
+          holdConfirmation = false
+        }
+        await store.saveActiveSessionState(state)
+      },
+      loadActiveSessionState: () => store.loadActiveSessionState(),
+      clearActiveSession: () => store.clearActiveSession(),
+      close: () => store.close(),
+    }
+    const coordinator = createAutoSaveCoordinator(delayedStore, 10)
+    const previous = createProjectFixture('旧作品')
+    const uploadB = createProjectFixture('同名图片')
+    const uploadC = createProjectFixture('同名图片')
+    await store.saveActiveSession(previous)
+    await coordinator.stagePendingUpload('upload-b', uploadB.source)
+    holdConfirmation = true
+
+    const confirmB = coordinator.confirmPendingUpload(uploadB, 'upload-b')
+    await confirmationWriteStarted
+    const stageC = coordinator.stagePendingUpload('upload-c', uploadC.source)
+    releaseConfirmationWrite()
+    await expect(Promise.all([confirmB, stageC])).resolves.toEqual([true, true])
+
+    await expect(store.loadActiveSessionState()).resolves.toMatchObject({
+      project: { projectId: uploadB.projectId },
+      pendingUpload: { uploadId: 'upload-c' },
+    })
+  })
+
+  it('keeps the previous valid session when a confirmed-upload transaction fails', async () => {
+    const { store } = createTestStore()
+    let rejectNextWrite = false
+    const failingStore: ActiveSessionStore = {
+      saveActiveSession: (project) => store.saveActiveSession(project),
+      loadActiveSession: () => store.loadActiveSession(),
+      saveActiveSessionState: (state) => {
+        if (rejectNextWrite) {
+          rejectNextWrite = false
+          return Promise.reject(new DOMException('quota exceeded', 'QuotaExceededError'))
+        }
+        return store.saveActiveSessionState(state)
+      },
+      loadActiveSessionState: () => store.loadActiveSessionState(),
+      clearActiveSession: () => store.clearActiveSession(),
+      close: () => store.close(),
+    }
+    const coordinator = createAutoSaveCoordinator(failingStore, 10)
+    const previous = createProjectFixture('保留的旧作品')
+    const uploadB = createProjectFixture('确认失败的新作品')
+    await store.saveActiveSession(previous)
+    await coordinator.stagePendingUpload('upload-b', uploadB.source)
+    rejectNextWrite = true
+
+    expect(await coordinator.confirmPendingUpload(uploadB, 'upload-b')).toBe(false)
+    await expect(store.loadActiveSessionState()).resolves.toMatchObject({
+      project: { projectId: previous.projectId },
+      pendingUpload: { uploadId: 'upload-b' },
     })
   })
 

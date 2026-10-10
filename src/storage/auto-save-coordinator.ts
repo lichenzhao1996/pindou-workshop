@@ -24,7 +24,13 @@ export interface AutoSaveCoordinator {
   stagePendingUpload(uploadId: string, source: Source): Promise<boolean>
   clearPendingUpload(uploadId: string): Promise<boolean>
   saveProject(project: Project, options?: { immediate?: boolean }): Promise<boolean>
-  startGeneration(project: Project, intentId: string): Promise<boolean>
+  confirmPendingUpload(project: Project, uploadId: string): Promise<boolean>
+  startGeneration(
+    project: Project,
+    intentId: string,
+    options?: { autoRecoveryAttempted?: boolean },
+  ): Promise<boolean>
+  markGenerationIntentAutoRecoveryAttempted(intentId: string): Promise<boolean>
   finishGeneration(project: Project, intentId: string): Promise<boolean>
   clearGenerationIntent(intentId: string): Promise<boolean>
   retry(): Promise<boolean>
@@ -41,16 +47,6 @@ const EMPTY_SESSION: ActiveSessionState = {
   project: null,
   pendingUpload: null,
   generationIntent: null,
-}
-
-function sourceMatches(left: Source, right: Source): boolean {
-  return (
-    left.originalImage === right.originalImage &&
-    left.originalFileName === right.originalFileName &&
-    left.mimeType === right.mimeType &&
-    left.originalWidth === right.originalWidth &&
-    left.originalHeight === right.originalHeight
-  )
 }
 
 function intentMatchesProject(intent: GenerationIntentSnapshot, project: Project): boolean {
@@ -229,30 +225,112 @@ export function createAutoSaveCoordinator(
     const immediate = options.immediate ?? false
     return mutate((current) => {
       const replaced = current.project?.projectId !== project.projectId
-      const pendingUpload =
-        current.pendingUpload && sourceMatches(current.pendingUpload.source, project.source)
-          ? null
-          : current.pendingUpload
       const generationIntent =
         !replaced &&
         current.generationIntent &&
         intentMatchesProject(current.generationIntent, project)
           ? current.generationIntent
           : null
-      return { ...current, project, pendingUpload, generationIntent }
+      return { ...current, project, generationIntent }
     }, immediate)
   }
 
-  function startGeneration(project: Project, intentId: string): Promise<boolean> {
+  function confirmPendingUpload(project: Project, uploadId: string): Promise<boolean> {
+    if (shouldSkipPersistence()) return Promise.resolve(true)
+    clearTimers()
+    return enqueue(async () => {
+      try {
+        await ensureLoaded()
+      } catch (error) {
+        status.isDirty = true
+        status.errorMessage = errorText(error)
+        return false
+      }
+
+      const current = session!
+      if (!current.pendingUpload || current.pendingUpload.uploadId !== uploadId) {
+        if (status.isDirty) scheduleFlush()
+        return false
+      }
+
+      const replaced = current.project?.projectId !== project.projectId
+      const generationIntent =
+        !replaced &&
+        current.generationIntent &&
+        intentMatchesProject(current.generationIntent, project)
+          ? current.generationIntent
+          : null
+      const next: ActiveSessionState = {
+        ...current,
+        project,
+        pendingUpload: null,
+        generationIntent,
+      }
+      const wasDirty = status.isDirty
+      status.isSaving = true
+      try {
+        await store.saveActiveSessionState(next)
+        session = next
+        dirtyVersion += 1
+        status.isDirty = false
+        status.errorMessage = null
+        status.lastSavedAt = Date.now()
+        return true
+      } catch (error) {
+        status.isDirty = wasDirty
+        status.errorMessage = errorText(error)
+        if (wasDirty) scheduleFlush()
+        return false
+      } finally {
+        status.isSaving = false
+      }
+    })
+  }
+
+  function startGeneration(
+    project: Project,
+    intentId: string,
+    options: { autoRecoveryAttempted?: boolean } = {},
+  ): Promise<boolean> {
     if (shouldSkipPersistence()) return Promise.resolve(true)
     return mutate(
       (current) => ({
         ...current,
         project,
-        generationIntent: createGenerationIntentSnapshot(project, intentId),
+        generationIntent: createGenerationIntentSnapshot(
+          project,
+          intentId,
+          new Date(),
+          options.autoRecoveryAttempted ?? false,
+        ),
       }),
       true,
     )
+  }
+
+  function markGenerationIntentAutoRecoveryAttempted(intentId: string): Promise<boolean> {
+    if (shouldSkipPersistence()) return Promise.resolve(true)
+    clearTimers()
+    return enqueue(async () => {
+      try {
+        await ensureLoaded()
+      } catch (error) {
+        status.isDirty = true
+        status.errorMessage = errorText(error)
+        return false
+      }
+
+      const intent = session!.generationIntent
+      if (!intent || intent.intentId !== intentId) return false
+      if (intent.autoRecoveryAttempted) return true
+
+      session = {
+        ...session!,
+        generationIntent: { ...intent, autoRecoveryAttempted: true },
+      }
+      markChanged()
+      return writeLatest()
+    })
   }
 
   function finishGeneration(project: Project, intentId: string): Promise<boolean> {
@@ -329,7 +407,9 @@ export function createAutoSaveCoordinator(
     stagePendingUpload,
     clearPendingUpload,
     saveProject,
+    confirmPendingUpload,
     startGeneration,
+    markGenerationIntentAutoRecoveryAttempted,
     finishGeneration,
     clearGenerationIntent,
     retry,

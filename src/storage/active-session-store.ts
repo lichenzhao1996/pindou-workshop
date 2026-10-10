@@ -32,6 +32,8 @@ export interface GenerationIntentSnapshot {
   crop: CropState
   generation: GenerationState
   startedAt: string
+  /** Optional for compatibility with already persisted v2 records. */
+  autoRecoveryAttempted?: boolean
 }
 
 export interface ActiveSessionState {
@@ -180,14 +182,25 @@ function validateGenerationIntent(
 ): asserts value is GenerationIntentSnapshot {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
-      'crop',
-      'generation',
-      'intentId',
-      'projectId',
-      'sourceIdentity',
-      'startedAt',
-    ])
+    !(
+      hasExactKeys(value, [
+        'crop',
+        'generation',
+        'intentId',
+        'projectId',
+        'sourceIdentity',
+        'startedAt',
+      ]) ||
+      hasExactKeys(value, [
+        'autoRecoveryAttempted',
+        'crop',
+        'generation',
+        'intentId',
+        'projectId',
+        'sourceIdentity',
+        'startedAt',
+      ])
+    )
   ) {
     throw new TypeError('Generation intent has an invalid structure')
   }
@@ -198,6 +211,8 @@ function validateGenerationIntent(
     value.sourceIdentity !== createProjectSourceIdentity(project) ||
     typeof value.startedAt !== 'string' ||
     !Number.isFinite(Date.parse(value.startedAt)) ||
+    (value.autoRecoveryAttempted !== undefined &&
+      typeof value.autoRecoveryAttempted !== 'boolean') ||
     !isRecord(value.crop) ||
     !isRecord(value.generation) ||
     !hasExactKeys(value.crop, ['aspectRatio', 'height', 'rotation', 'width', 'x', 'y']) ||
@@ -220,6 +235,7 @@ export function createGenerationIntentSnapshot(
   project: Project,
   intentId: string,
   startedAt: Date = new Date(),
+  autoRecoveryAttempted = false,
 ): GenerationIntentSnapshot {
   return {
     intentId,
@@ -228,6 +244,7 @@ export function createGenerationIntentSnapshot(
     crop: { ...project.crop },
     generation: { ...project.generation },
     startedAt: startedAt.toISOString(),
+    autoRecoveryAttempted,
   }
 }
 
@@ -389,6 +406,7 @@ function restoreRecord(value: unknown): ActiveSessionState {
           ? null
           : {
               ...value.generationIntent,
+              autoRecoveryAttempted: value.generationIntent.autoRecoveryAttempted ?? false,
               crop: { ...value.generationIntent.crop },
               generation: { ...value.generationIntent.generation },
             },

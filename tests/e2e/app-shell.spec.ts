@@ -15,10 +15,42 @@ async function clearActiveSessionDatabase(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve, reject) => {
-        const request = indexedDB.deleteDatabase('pindou-workshop')
-        request.addEventListener('success', () => resolve(), { once: true })
+        const request = indexedDB.open('pindou-workshop', 1)
+        request.addEventListener(
+          'upgradeneeded',
+          () => {
+            if (!request.result.objectStoreNames.contains('active-session')) {
+              request.result.createObjectStore('active-session', { keyPath: 'id' })
+            }
+          },
+          { once: true },
+        )
+        request.addEventListener(
+          'success',
+          () => {
+            const database = request.result
+            const transaction = database.transaction('active-session', 'readwrite')
+            transaction.objectStore('active-session').delete('current')
+            transaction.addEventListener(
+              'complete',
+              () => {
+                database.close()
+                resolve()
+              },
+              { once: true },
+            )
+            transaction.addEventListener(
+              'abort',
+              () => {
+                database.close()
+                reject(transaction.error ?? new Error('IDB cleanup failed.'))
+              },
+              { once: true },
+            )
+          },
+          { once: true },
+        )
         request.addEventListener('error', () => reject(request.error), { once: true })
-        request.addEventListener('blocked', () => reject(new Error('IDB cleanup was blocked.')))
       }),
   )
 }
@@ -121,7 +153,160 @@ async function readActiveSessionRecord(page: Page) {
   )
 }
 
+async function seedLegacyGenerationIntent(
+  page: Page,
+  options: { attempted?: boolean; clearGrid?: boolean } = {},
+) {
+  return page.evaluate(
+    ({ attempted, clearGrid }) =>
+      new Promise<{ intentId: string; attempted: boolean }>((resolve, reject) => {
+        const request = indexedDB.open('pindou-workshop', 1)
+        request.addEventListener(
+          'success',
+          () => {
+            const database = request.result
+            const transaction = database.transaction('active-session', 'readwrite')
+            const objectStore = transaction.objectStore('active-session')
+            const get = objectStore.get('current')
+            get.addEventListener(
+              'success',
+              () => {
+                const record = get.result
+                const project = record?.project
+                if (!project) {
+                  database.close()
+                  reject(new Error('Cannot seed an intent without a persisted Project.'))
+                  return
+                }
+                const intentId = `resume-${project.projectId}`
+                if (clearGrid) project.grid = null
+                const source = project.source
+                record.generationIntent = {
+                  intentId,
+                  projectId: project.projectId,
+                  sourceIdentity: JSON.stringify([
+                    project.projectId,
+                    source.originalFileName,
+                    source.mimeType,
+                    source.originalWidth,
+                    source.originalHeight,
+                    source.originalImage.type,
+                    source.originalImage.size,
+                  ]),
+                  crop: { ...project.crop },
+                  generation: { ...project.generation },
+                  startedAt: new Date().toISOString(),
+                  ...(attempted ? { autoRecoveryAttempted: true } : {}),
+                }
+                objectStore.put(record)
+                transaction.addEventListener(
+                  'complete',
+                  () => {
+                    database.close()
+                    resolve({ intentId, attempted: Boolean(attempted) })
+                  },
+                  { once: true },
+                )
+              },
+              { once: true },
+            )
+            get.addEventListener(
+              'error',
+              () => {
+                database.close()
+                reject(get.error ?? new Error('Could not load Project for intent seed.'))
+              },
+              { once: true },
+            )
+          },
+          { once: true },
+        )
+        request.addEventListener('error', () => reject(request.error), { once: true })
+      }),
+    options,
+  )
+}
+
+async function seedCorruptedSession(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open('pindou-workshop', 1)
+        request.addEventListener(
+          'success',
+          () => {
+            const database = request.result
+            const transaction = database.transaction('active-session', 'readwrite')
+            transaction.objectStore('active-session').put({
+              id: 'current',
+              schemaVersion: 2,
+              project: { malformed: true },
+              pendingUpload: null,
+              generationIntent: null,
+            })
+            transaction.addEventListener(
+              'complete',
+              () => {
+                database.close()
+                resolve()
+              },
+              { once: true },
+            )
+            transaction.addEventListener(
+              'abort',
+              () => {
+                database.close()
+                reject(transaction.error ?? new Error('Could not seed corrupted session.'))
+              },
+              { once: true },
+            )
+          },
+          { once: true },
+        )
+        request.addEventListener('error', () => reject(request.error), { once: true })
+      }),
+  )
+}
+
+async function hasActiveSessionRecord(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<boolean>((resolve, reject) => {
+        const request = indexedDB.open('pindou-workshop', 1)
+        request.addEventListener(
+          'success',
+          () => {
+            const database = request.result
+            const get = database
+              .transaction('active-session', 'readonly')
+              .objectStore('active-session')
+              .get('current')
+            get.addEventListener(
+              'success',
+              () => {
+                database.close()
+                resolve(get.result !== undefined)
+              },
+              { once: true },
+            )
+            get.addEventListener(
+              'error',
+              () => {
+                database.close()
+                reject(get.error)
+              },
+              { once: true },
+            )
+          },
+          { once: true },
+        )
+        request.addEventListener('error', () => reject(request.error), { once: true })
+      }),
+  )
+}
+
 async function uploadCanvasImage(page: Page, fileName: string, color = '#FAF4C8') {
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   await page.evaluate(
     async ({ name, fill }) => {
       const canvas = document.createElement('canvas')
@@ -148,7 +333,7 @@ async function uploadCanvasImage(page: Page, fileName: string, color = '#FAF4C8'
 }
 const routeCases = [
   { path: '/', heading: '把你的图片，变成可以直接制作的拼豆图纸' },
-  { path: '/crop', heading: '确认图片范围' },
+  { path: '/crop', heading: '把你的图片，变成可以直接制作的拼豆图纸' },
   { path: '/editor', heading: '把你的图片，变成可以直接制作的拼豆图纸' },
   { path: '/unknown-route', heading: '把你的图片，变成可以直接制作的拼豆图纸' },
 ]
@@ -302,6 +487,7 @@ test('continues to the crop route while showing a low-resolution warning', async
 
 test('shows the default 64x48 generation size for a 4:3 crop', async ({ page }) => {
   await page.goto('/')
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   await page.evaluate(async () => {
     const canvas = document.createElement('canvas')
     canvas.width = 4
@@ -371,6 +557,7 @@ test('confirms the crop and restores the confirmed range when returning to crop'
 
 async function uploadGenerationFixture(page: Page) {
   await page.goto('/')
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   // Local deterministic 4:3 PNG, using two exact reference Palette colors.
   await page.evaluate(async () => {
     const canvas = document.createElement('canvas')
@@ -651,6 +838,7 @@ test('TASK-048–050 labels, hit testing, pan priority, and source compare use t
   page.on('worker', (worker) => workers.push(worker.url()))
 
   await page.goto('/')
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   await page.evaluate(async () => {
     const canvas = document.createElement('canvas')
     canvas.width = 20
@@ -831,6 +1019,7 @@ test('TASK-062–064 real Worker edit Undo/Redo and MiniMap navigation stay on o
   page.on('pageerror', (error) => errors.push(error.message))
 
   await page.goto('/')
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   await page.evaluate(async () => {
     const sourceCanvas = document.createElement('canvas')
     sourceCanvas.width = 20
@@ -1017,6 +1206,7 @@ test('TASK-065–068 manages used colors, synchronizes highlight, and replaces t
   page.on('worker', (worker) => workerUrls.push(worker.url()))
 
   await page.goto('/')
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   await page.evaluate(async () => {
     const imageCanvas = document.createElement('canvas')
     imageCanvas.width = 20
@@ -1280,6 +1470,7 @@ test('TASK-051–055 uses the shared color picker on the real Worker Project wit
   page.on('worker', (worker) => workers.push(worker.url()))
 
   await page.goto('/')
+  await expect(page.getByTestId('image-file-input')).toBeAttached()
   await page.evaluate(async () => {
     const canvas = document.createElement('canvas')
     canvas.width = 20
@@ -1912,7 +2103,7 @@ test('TASK-072 keeps an old formal Project while a second real upload is pending
     })
 
   await page.getByTestId('crop-cancel-upload').click()
-  await expect(page).toHaveURL('/')
+  await expect(page).toHaveURL(/\/editor$/)
   await expect
     .poll(async () => readActiveSessionRecord(page))
     .toMatchObject({
@@ -2122,4 +2313,564 @@ test('TASK-072 saves only confirmed Crop, width, and generation-mode settings', 
     .poll(async () => readActiveSessionRecord(page))
     .toMatchObject({ project: { generationMode: 'high-fidelity', generationWidth: 48 } })
   expect((await readActiveSessionRecord(page))?.pendingUpload).toBeNull()
+})
+
+test('TASK-073 restores edited Project data after a real browser refresh and starts a fresh History lineage', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const startedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const generated = await assertCommittedGrid(page, 32, 24, startedAt)
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId('picker-color-26').click()
+  await page.getByTestId('picker-close').click()
+  const geometry = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const canvas = await page.getByTestId('editor-canvas').boundingBox()
+  if (!canvas) throw new Error('Expected Canvas bounds before the first edit.')
+  const initialCell = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE / 2, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    geometry,
+  )
+  await page.mouse.click(canvas.x + initialCell.x, canvas.y + initialCell.y)
+  await page.getByTestId('apply-current-color').click()
+  await page.getByTestId('project-name-rename').click()
+  await page.getByTestId('project-name-input').fill('刷新恢复作品')
+  await page.getByTestId('project-name-confirm').click()
+
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: {
+        projectId: generated.projectId,
+        projectName: '刷新恢复作品',
+        revision: 1,
+        generationMode: 'optimized',
+        generationWidth: 32,
+        generationHeight: 24,
+        sourceFileName: 'task037-local.png',
+        cellsAreUint16Array: true,
+      },
+      pendingUpload: null,
+      generationIntent: null,
+    })
+  const beforeReload = await readActiveSessionRecord(page)
+  await page.reload()
+
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute(
+    'data-project-id',
+    generated.projectId,
+  )
+  await expect(page.getByTestId('editor-project-name')).toHaveText('刷新恢复作品')
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  await expect(page.getByTestId('editor-undo')).toBeDisabled()
+  await expect(page.getByTestId('editor-redo')).toBeDisabled()
+  const afterReload = await readActiveSessionRecord(page)
+  expect(afterReload?.project).toMatchObject({
+    projectId: beforeReload?.project?.projectId,
+    projectName: beforeReload?.project?.projectName,
+    revision: beforeReload?.project?.revision,
+    generationMode: beforeReload?.project?.generationMode,
+    generationWidth: beforeReload?.project?.generationWidth,
+    generationHeight: beforeReload?.project?.generationHeight,
+    cropRotation: beforeReload?.project?.cropRotation,
+    cells: beforeReload?.project?.cells,
+    cellsAreUint16Array: true,
+  })
+  const restoredRuntime = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject?: Project }> } } }
+      }
+    }
+    const project =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject!
+    return {
+      crop: project.crop,
+      sourceFileName: project.source.originalFileName,
+      sourceMimeType: project.source.mimeType,
+      mode: project.generation.mode,
+      widthBeads: project.generation.widthBeads,
+      heightBeads: project.generation.heightBeads,
+      gridCellsAreUint16Array: project.grid?.cells instanceof Uint16Array,
+    }
+  })
+  expect(restoredRuntime).toMatchObject({
+    crop: expect.objectContaining({ rotation: afterReload?.project?.cropRotation }),
+    sourceFileName: 'task037-local.png',
+    sourceMimeType: 'image/png',
+    mode: 'optimized',
+    widthBeads: 32,
+    heightBeads: 24,
+    gridCellsAreUint16Array: true,
+  })
+
+  await page.getByTestId('unified-color-picker-toggle').click()
+  await page.getByTestId('picker-mode-code').click()
+  await page.getByTestId('picker-color-26').click()
+  await page.getByTestId('picker-close').click()
+  const restoredGeometry = await page.evaluate(() => {
+    const area = document.querySelector('[data-testid="editor-canvas-area"]')!
+    return {
+      zoom: Number(area.getAttribute('data-zoom')),
+      panX: Number(area.getAttribute('data-pan-x')),
+      panY: Number(area.getAttribute('data-pan-y')),
+    }
+  })
+  const restoredCanvas = await page.getByTestId('editor-canvas').boundingBox()
+  if (!restoredCanvas) throw new Error('Expected Canvas bounds after restore.')
+  const nextCell = worldToScreen(
+    { x: GRID_AXIS_MARGIN + CELL_SIZE * 1.5, y: GRID_AXIS_MARGIN + CELL_SIZE / 2 },
+    restoredGeometry,
+  )
+  await page.mouse.click(restoredCanvas.x + nextCell.x, restoredCanvas.y + nextCell.y)
+  await page.getByTestId('apply-current-color').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '2')
+  await page.getByTestId('editor-undo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '1')
+  await page.getByTestId('editor-redo').click()
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '2')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 2 }, generationIntent: null })
+})
+
+test('TASK-073 preserves A while pending B refreshes, cancels to A, and confirmed C replaces A', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadCanvasImage(page, 'project-A.png')
+  await page.getByTestId('crop-confirm').click()
+  await page.getByTestId('grid-width-preset-32').click()
+  const startedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const projectA = await assertCommittedGrid(page, 32, 24, startedAt)
+  const recordA = await readActiveSessionRecord(page)
+
+  await page.goBack()
+  await page.goBack()
+  await expect(page).toHaveURL('/')
+  await uploadCanvasImage(page, 'pending-B.png', '#27523A')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: projectA.projectId, cells: recordA?.project?.cells },
+      pendingUpload: { fileName: 'pending-B.png' },
+    })
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByRole('heading', { name: '确认图片范围' })).toBeVisible()
+  const restoredAB = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<
+                string,
+                {
+                  currentProject?: Project | null
+                  pendingInput?: { originalFileName: string | null } | null
+                  pendingUploadId?: string | null
+                }
+              >
+            }
+          }
+        }
+      }
+    }
+    const stores = root.__vue_app__.config.globalProperties.$pinia._s
+    return {
+      projectId: stores.get('project')!.currentProject?.projectId,
+      pendingName: stores.get('upload')!.pendingInput?.originalFileName,
+      uploadId: stores.get('upload')!.pendingUploadId,
+    }
+  })
+  expect(restoredAB).toMatchObject({ projectId: projectA.projectId, pendingName: 'pending-B.png' })
+  expect(restoredAB.uploadId).toBeTruthy()
+
+  await page.getByTestId('crop-cancel-upload').click()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute(
+    'data-project-id',
+    projectA.projectId,
+  )
+  const afterCancel = await readActiveSessionRecord(page)
+  expect(afterCancel?.project).toMatchObject({
+    projectId: recordA?.project?.projectId,
+    projectName: recordA?.project?.projectName,
+    revision: recordA?.project?.revision,
+    cells: recordA?.project?.cells,
+  })
+  expect(afterCancel?.pendingUpload).toBeNull()
+
+  await page.goBack()
+  await expect(page).toHaveURL('/')
+  await uploadCanvasImage(page, 'confirmed-C.png', '#FAF4C8')
+  await page.getByTestId('crop-confirm').click()
+  await expect(page.getByTestId('crop-confirmation-status')).toContainText('裁剪已确认')
+  const replaced = await readActiveSessionRecord(page)
+  expect(replaced?.project?.projectId).not.toBe(projectA.projectId)
+  expect(replaced?.project?.sourceFileName).toBe('confirmed-C.png')
+  expect(replaced?.project?.width).toBeNull()
+  expect(replaced?.pendingUpload).toBeNull()
+  const workersBeforeRefreshWithoutIntent = workerUrls.length
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: replaced?.project?.projectId, sourceFileName: 'confirmed-C.png' },
+      pendingUpload: null,
+    })
+  expect(workerUrls.some((url) => url.includes('generation.worker'))).toBe(true)
+  expect(workerUrls).toHaveLength(workersBeforeRefreshWithoutIntent)
+})
+
+test('TASK-073 directly confirms restored pending B and never restores it as pending again', async ({
+  page,
+}) => {
+  const workerUrls: string[] = []
+  page.on('worker', (worker) => workerUrls.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const aStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const projectA = await assertCommittedGrid(page, 32, 24, aStartedAt)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: projectA.projectId, sourceFileName: 'task037-local.png' },
+      pendingUpload: null,
+    })
+
+  await page.goBack()
+  await page.goBack()
+  await expect(page).toHaveURL('/')
+  await uploadCanvasImage(page, 'restored-pending-B.png')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: projectA.projectId },
+      pendingUpload: { fileName: 'restored-pending-B.png' },
+    })
+  const stagedRecord = await readActiveSessionRecord(page)
+  const pendingUploadId = stagedRecord?.pendingUpload?.uploadId
+  expect(pendingUploadId).toBeTruthy()
+
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByRole('heading', { name: '确认图片范围' })).toBeVisible()
+  await expect(page.getByTestId('crop-cancel-upload')).toBeVisible()
+  const restoredPendingId = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: { _s: Map<string, { pendingUploadId?: string | null }> }
+          }
+        }
+      }
+    }
+    return root.__vue_app__.config.globalProperties.$pinia._s.get('upload')!.pendingUploadId
+  })
+  expect(restoredPendingId).toBe(pendingUploadId)
+
+  await page.getByTestId('crop-confirm').click()
+  await expect(page.getByTestId('crop-confirmation-status')).toContainText('裁剪已确认')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: {
+        sourceFileName: 'restored-pending-B.png',
+        width: null,
+        height: null,
+        cells: null,
+      },
+      pendingUpload: null,
+      generationIntent: null,
+    })
+  const confirmedB = await readActiveSessionRecord(page)
+  expect(confirmedB?.project?.projectId).not.toBe(projectA.projectId)
+
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByRole('heading', { name: '确认图片范围' })).toBeVisible()
+  await expect(page.getByTestId('crop-cancel-upload')).toBeHidden()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: {
+        projectId: confirmedB?.project?.projectId,
+        sourceFileName: 'restored-pending-B.png',
+        width: null,
+        cells: null,
+      },
+      pendingUpload: null,
+    })
+
+  const restoredConfirmedId = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<string, { currentProject?: Project | null; pendingUploadId?: string | null }>
+            }
+          }
+        }
+      }
+    }
+    const stores = root.__vue_app__.config.globalProperties.$pinia._s
+    return {
+      projectId: stores.get('project')!.currentProject?.projectId,
+      pendingUploadId: stores.get('upload')!.pendingUploadId,
+    }
+  })
+  expect(restoredConfirmedId).toEqual({
+    projectId: confirmedB?.project?.projectId,
+    pendingUploadId: null,
+  })
+
+  const bStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  const generatedB = await assertCommittedGrid(page, 64, 48, bStartedAt)
+  expect(generatedB.projectId).toBe(confirmedB?.project?.projectId)
+  expect(workerUrls.filter((url) => url.includes('generation.worker')).length).toBe(2)
+  await page.reload()
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute(
+    'data-project-id',
+    generatedB.projectId,
+  )
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { projectId: generatedB.projectId, sourceFileName: 'restored-pending-B.png' },
+      pendingUpload: null,
+    })
+})
+
+test('TASK-073 resumes one legacy generation intent with the real Worker and never repeats an attempted intent', async ({
+  page,
+}) => {
+  const runtimeErrors: string[] = []
+  page.on('pageerror', (error) => runtimeErrors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') runtimeErrors.push(message.text())
+  })
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const intent = await seedLegacyGenerationIntent(page)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ generationIntent: { intentId: intent.intentId } })
+  const worker = new Promise<string>((resolve) => {
+    page.on('worker', (created) => {
+      if (!created.url().includes('generation.worker')) return
+      resolve(created.url())
+    })
+  })
+
+  await page.reload()
+  // Recovery may finish before the Crop view paints, so assert the durable result
+  // of the one-shot resume instead of depending on a transient intermediate route.
+  await expect(page).toHaveURL(/\/editor$/, { timeout: 15000 })
+  const recoveryDiagnostics = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<
+                string,
+                {
+                  generationStatus?: string
+                  generationError?: string | null
+                  currentProject?: Project | null
+                  pendingUploadId?: string | null
+                }
+              >
+            }
+          }
+        }
+      }
+    }
+    const stores = root.__vue_app__.config.globalProperties.$pinia._s
+    return {
+      projectId: stores.get('project')!.currentProject?.projectId,
+      generationStatus: stores.get('project')!.generationStatus,
+      generationError: stores.get('project')!.generationError,
+      pendingUploadId: stores.get('upload')!.pendingUploadId,
+    }
+  })
+  expect(recoveryDiagnostics).toMatchObject({
+    projectId: expect.any(String),
+    pendingUploadId: null,
+  })
+  expect(runtimeErrors).toEqual([])
+  expect(await worker).toContain('generation.worker')
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-grid-encoding', 'Uint16Array')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 0, width: 32, height: 24 }, generationIntent: null })
+
+  await seedLegacyGenerationIntent(page, { attempted: true, clearGrid: true })
+  const repeatedWorkers: string[] = []
+  page.on('worker', (created) => repeatedWorkers.push(created.url()))
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByTestId('generate')).toBeEnabled()
+  expect(repeatedWorkers.filter((url) => url.includes('generation.worker'))).toEqual([])
+  expect((await readActiveSessionRecord(page))?.generationIntent).toMatchObject({
+    autoRecoveryAttempted: true,
+  })
+})
+
+test('TASK-073 gives pending B priority over A intent and resumes A only after B is cancelled', async ({
+  page,
+}) => {
+  const workers: string[] = []
+  page.on('worker', (worker) => workers.push(worker.url()))
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  await page.goBack()
+  await expect(page).toHaveURL('/')
+  await uploadCanvasImage(page, 'pending-priority-B.png', '#27523A')
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ pendingUpload: { fileName: 'pending-priority-B.png' } })
+  const intent = await seedLegacyGenerationIntent(page)
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect(page.getByTestId('crop-cancel-upload')).toBeVisible()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ generationIntent: { intentId: intent.intentId } })
+  expect((await readActiveSessionRecord(page))?.generationIntent).not.toHaveProperty(
+    'autoRecoveryAttempted',
+  )
+  expect(workers.filter((url) => url.includes('generation.worker'))).toEqual([])
+
+  const resumedWorker = new Promise<string>((resolve) => {
+    page.on('worker', (created) => {
+      if (!created.url().includes('generation.worker')) return
+      resolve(created.url())
+    })
+  })
+  await page.getByTestId('crop-cancel-upload').click()
+  expect(await resumedWorker).toContain('generation.worker')
+  await expect(page).toHaveURL(/\/editor$/)
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+  expect(workers.some((url) => url.includes('generation.worker'))).toBe(true)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ project: { revision: 0, width: 32, height: 24 }, pendingUpload: null })
+  expect((await readActiveSessionRecord(page))?.generationIntent).toBeNull()
+  expect(intent.intentId).toContain('resume-')
+})
+
+test('TASK-073 keeps corrupted records until explicit confirmed discard', async ({ page }) => {
+  await clearActiveSessionDatabase(page)
+  await seedCorruptedSession(page)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '暂时无法恢复当前作品' })).toBeVisible()
+  await expect(page.getByRole('alert')).toContainText('原记录未删除')
+  expect(await hasActiveSessionRecord(page)).toBe(true)
+  await page.getByRole('button', { name: '重试恢复' }).click()
+  await expect(page.getByRole('heading', { name: '暂时无法恢复当前作品' })).toBeVisible()
+  expect(await hasActiveSessionRecord(page)).toBe(true)
+
+  await page.getByRole('button', { name: '放弃本地会话' }).click()
+  await expect(page.getByRole('alertdialog')).toContainText('可能导致作品永久丢失')
+  await page.getByRole('button', { name: '保留作品' }).click()
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '暂时无法恢复当前作品' })).toBeVisible()
+  expect(await hasActiveSessionRecord(page)).toBe(true)
+
+  await page.getByRole('button', { name: '放弃本地会话' }).click()
+  await page.getByRole('button', { name: '确认放弃并清除' }).click()
+  await expect(page).toHaveURL('/')
+  await expect(
+    page.getByRole('heading', { name: '把你的图片，变成可以直接制作的拼豆图纸' }),
+  ).toBeVisible()
+  expect(await hasActiveSessionRecord(page)).toBe(false)
+})
+
+test('TASK-073 cancelling a pending-only upload returns Home, while A without Grid returns to Crop A', async ({
+  page,
+}) => {
+  await clearActiveSessionDatabase(page)
+  await uploadCanvasImage(page, 'pending-only.png')
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ pendingUpload: { fileName: 'pending-only.png' } })
+  await page.reload()
+  await expect(page).toHaveURL(/\/crop$/)
+  await page.getByTestId('crop-cancel-upload').click()
+  await expect(page).toHaveURL('/')
+  await expect(
+    page.getByRole('heading', { name: '把你的图片，变成可以直接制作的拼豆图纸' }),
+  ).toBeVisible()
+  expect(await readActiveSessionRecord(page)).toBeNull()
+
+  await uploadCanvasImage(page, 'project-A-no-grid.png')
+  await page.getByTestId('crop-confirm').click()
+  const projectA = await readActiveSessionRecord(page)
+  expect(projectA?.project?.sourceFileName).toBe('project-A-no-grid.png')
+  expect(projectA?.project?.width).toBeNull()
+  await page.goBack()
+  await expect(page).toHaveURL('/')
+  await uploadCanvasImage(page, 'pending-B.png', '#27523A')
+  await page.reload()
+  await page.getByTestId('crop-cancel-upload').click()
+  await expect(page).toHaveURL(/\/crop$/)
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({ pendingUpload: null, project: { sourceFileName: 'project-A-no-grid.png' } })
+  const restoredSource = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: {
+            $pinia: {
+              _s: Map<string, { pendingInput?: { originalFileName: string | null } | null }>
+            }
+          }
+        }
+      }
+    }
+    return root.__vue_app__.config.globalProperties.$pinia._s.get('upload')!.pendingInput
+      ?.originalFileName
+  })
+  expect(restoredSource).toBe('project-A-no-grid.png')
+  await expect(page.getByTestId('grid-width-input')).toHaveValue('64')
+  await expect(page.getByTestId('generation-mode-optimized')).toBeChecked()
+  await expect
+    .poll(async () => readActiveSessionRecord(page))
+    .toMatchObject({
+      project: { sourceFileName: 'project-A-no-grid.png' },
+      pendingUpload: null,
+    })
 })
