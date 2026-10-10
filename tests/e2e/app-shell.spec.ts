@@ -2994,3 +2994,77 @@ test('TASK-073 cancelling a pending-only upload returns Home, while A without Gr
       pendingUpload: null,
     })
 })
+
+test('TASK-076 opens the complete materials list for the real Worker Project', async ({ page }) => {
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 32, 24, generationStartedAt)
+
+  const project = await page.evaluate(() => {
+    const root = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: {
+          globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } }
+        }
+      }
+    }
+    const current =
+      root.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    return {
+      projectId: current.projectId,
+      width: current.grid!.width,
+      height: current.grid!.height,
+      cells: Array.from(current.grid!.cells),
+    }
+  })
+  expect(project.projectId).toBeTruthy()
+
+  const counts = new Map<number, number>()
+  for (const paletteIndex of project.cells) {
+    if (paletteIndex !== 0) counts.set(paletteIndex, (counts.get(paletteIndex) ?? 0) + 1)
+  }
+  await page.getByTestId('material-list-toggle').click()
+  await expect(page.getByTestId('full-material-list')).toBeVisible()
+  const rows = page.locator('[data-testid^="material-list-row-"]')
+  await expect(rows).toHaveCount(counts.size)
+  for (const [paletteIndex, actual] of counts) {
+    const entry = MARD_291_PALETTE.entries.find(
+      (candidate) => candidate.paletteIndex === paletteIndex,
+    )
+    if (!entry) throw new Error(`Expected MARD entry for palette index ${paletteIndex}`)
+    const row = page.getByTestId(`material-list-row-${paletteIndex}`)
+    await expect(row).toContainText(entry.displayCode)
+    await expect(row).toContainText(entry.name)
+    await expect(row).toContainText(`${actual} 颗`)
+    await expect(row).toContainText(`${actual + Math.ceil(actual / 20)} 颗`)
+  }
+  await page.getByTestId('material-list-close').click()
+  await expect(page.getByTestId('full-material-list')).toBeHidden()
+})
+
+test('TASK-078 downloads a valid effect preview PNG for the real Worker Project', async ({
+  page,
+}) => {
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-32').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 32, 24, generationStartedAt)
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-effect-preview-png').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('task037-local_32x24.png')
+  const path = await download.path()
+  if (!path) throw new Error('Expected the effect PNG download to have a file path.')
+  const { readFile } = await import('node:fs/promises')
+  const png = await readFile(path)
+  expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  expect(png.toString('ascii', 12, 16)).toBe('IHDR')
+  expect(png.readUInt32BE(16)).toBe(32 * 32 + 32 * 2)
+  expect(png.readUInt32BE(20)).toBe(24 * 32 + 32 * 2 + 76)
+})

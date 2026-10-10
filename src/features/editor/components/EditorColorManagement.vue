@@ -67,6 +67,57 @@
       {{ project?.grid ? '当前作品没有已使用颜色。' : '暂无作品颜色。' }}
     </p>
 
+    <button
+      v-if="usedRows.length"
+      type="button"
+      class="material-list-toggle"
+      data-testid="material-list-toggle"
+      :aria-expanded="fullMaterialsOpen"
+      @click="fullMaterialsOpen = !fullMaterialsOpen"
+    >
+      {{ fullMaterialsOpen ? '收起完整材料清单' : '查看完整材料清单' }}
+    </button>
+    <section
+      v-if="fullMaterialsOpen && usedRows.length"
+      class="full-material-list"
+      aria-label="完整材料清单"
+      data-testid="full-material-list"
+    >
+      <h3>完整材料清单</h3>
+      <div class="material-list-table-scroll">
+        <table data-testid="material-list-table">
+          <thead>
+            <tr>
+              <th scope="col">色号</th>
+              <th scope="col">名称</th>
+              <th scope="col">实际数量</th>
+              <th scope="col">建议准备数量</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in usedRows"
+              :key="row.paletteIndex"
+              :data-testid="`material-list-row-${row.paletteIndex}`"
+            >
+              <td>{{ row.entry.displayCode }}</td>
+              <td>{{ row.entry.name }}</td>
+              <td>{{ row.count }} 颗</td>
+              <td>{{ row.suggestedCount }} 颗</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <button
+        type="button"
+        class="material-list-close"
+        data-testid="material-list-close"
+        @click="fullMaterialsOpen = false"
+      >
+        关闭材料清单
+      </button>
+    </section>
+
     <section v-if="replacementOpen" class="replacement-panel" data-testid="replacement-panel">
       <h3>全局颜色替换</h3>
       <p v-if="sourceEntry" data-testid="replacement-source">
@@ -132,6 +183,7 @@ const editor = useEditorStore()
 const projectStore = useProjectStore()
 const searchQuery = ref('')
 const sortOrder = ref<UsedColorSort>('count')
+const fullMaterialsOpen = ref(false)
 const usedRows = computed(() => props.materialView?.rows ?? [])
 const visibleRows = computed(() =>
   sortUsedColorRows(filterUsedColorRows(usedRows.value, searchQuery.value), sortOrder.value),
@@ -285,6 +337,14 @@ function invalidateStalePreview() {
 }
 
 watch(
+  () => props.project?.projectId,
+  () => {
+    fullMaterialsOpen.value = false
+  },
+  { flush: 'sync' },
+)
+
+watch(
   () => [
     props.project?.projectId,
     props.project?.grid,
@@ -336,6 +396,43 @@ select {
 .used-color-list {
   display: grid;
   gap: var(--space-2);
+}
+
+.material-list-toggle,
+.material-list-close {
+  justify-self: start;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-action);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-background);
+  color: var(--color-action);
+  cursor: pointer;
+}
+
+.full-material-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.material-list-table-scroll {
+  overflow-x: auto;
+}
+
+.full-material-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.full-material-list th,
+.full-material-list td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-width) solid var(--color-border);
+  text-align: left;
+  white-space: nowrap;
 }
 
 .used-color-item {

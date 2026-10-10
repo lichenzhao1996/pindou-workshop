@@ -76,6 +76,7 @@
       :material-view="materialView"
       @replacement-preview="handleReplacementPreview"
     />
+    <EditorExportActions :project="project" />
     <RouterLink to="/crop">返回裁剪与生成设置</RouterLink>
   </aside>
 </template>
@@ -93,6 +94,7 @@ import type { Project } from '../../../domain/project/types'
 import type { ReplacementPreview } from '../replacement-preview'
 import { deriveMaterialStatsView } from '../materials/material-stats-view'
 import EditorColorManagement from './EditorColorManagement.vue'
+import EditorExportActions from './EditorExportActions.vue'
 
 const props = defineProps<{ project: Project | null }>()
 const emit = defineEmits<{ 'replacement-preview': [preview: ReplacementPreview | null] }>()
