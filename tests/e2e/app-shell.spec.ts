@@ -642,6 +642,20 @@ async function assertCommittedGrid(
   return actual
 }
 
+async function readCurrentGridCells(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const element = document.querySelector('#app') as HTMLElement & {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, { currentProject: Project }> } } }
+      }
+    }
+    const project =
+      element.__vue_app__.config.globalProperties.$pinia._s.get('project')!.currentProject
+    if (!project.grid) throw new Error('Expected the current Project to contain a Grid')
+    return Array.from(project.grid.cells)
+  })
+}
+
 for (const mode of ['optimized', 'high-fidelity'] as const) {
   test(`TASK-037 generates a real ${mode} Grid through the browser Worker before Editor`, async ({
     page,
@@ -3200,7 +3214,9 @@ test('TASK-081/082 exports a real PDF overview with Chinese and formal ProjectSt
   await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
 })
 
-test('TASK-084 exports a real PDF with complete non-overlapping page ranges', async ({ page }) => {
+test('TASK-084/086/087 exports PDF ranges with location thumbnails and a matching material list', async ({
+  page,
+}) => {
   await clearActiveSessionDatabase(page)
   await uploadGenerationFixture(page)
   await page.getByTestId('grid-width-preset-64').click()
@@ -3223,7 +3239,14 @@ test('TASK-084 exports a real PDF with complete non-overlapping page ranges', as
 
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
-  expect(pdf.numPages).toBe(5)
+  const { derivePdfMaterialsRowsPerPage } = await import('../../src/features/export/pdf/materials')
+  const gridValues = await readCurrentGridCells(page)
+  const usedPaletteIndices = [...new Set(gridValues.filter((paletteIndex) => paletteIndex !== 0))]
+  const materialPageCount = Math.max(
+    1,
+    Math.ceil(usedPaletteIndices.length / derivePdfMaterialsRowsPerPage()),
+  )
+  expect(pdf.numPages).toBe(1 + 4 + materialPageCount)
   const overview = await pdf.getPage(1)
   const overviewText = (await overview.getTextContent()).items
     .filter((item) => 'str' in item)
@@ -3233,11 +3256,12 @@ test('TASK-084 exports a real PDF with complete non-overlapping page ranges', as
   expect(overviewText).toContain('豆数尺寸：64 × 48 颗')
 
   const expectedRanges = [
-    ['行 0–30', '列 0–45'],
-    ['行 0–30', '列 46–63'],
-    ['行 31–47', '列 0–45'],
-    ['行 31–47', '列 46–63'],
+    ['Rows 0-30', 'columns 0-45'],
+    ['Rows 0-30', 'columns 46-63'],
+    ['Rows 31-47', 'columns 0-45'],
+    ['Rows 31-47', 'columns 46-63'],
   ]
+  const { OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   for (let index = 0; index < expectedRanges.length; index += 1) {
     const pdfPage = await pdf.getPage(index + 2)
     const extractedText = (await pdfPage.getTextContent()).items
@@ -3246,11 +3270,112 @@ test('TASK-084 exports a real PDF with complete non-overlapping page ranges', as
       .join(' ')
     expect(extractedText).toContain(expectedRanges[index]![0])
     expect(extractedText).toContain(expectedRanges[index]![1])
+    expect(extractedText).toContain(`第 ${index + 2} 页`)
     const viewport = pdfPage.getViewport({ scale: 1 })
     expect(viewport.width).toBeCloseTo(841.89, 0)
     expect(viewport.height).toBeCloseTo(595.28, 0)
+    const operators = await pdfPage.getOperatorList()
+    expect(operators.fnArray).toContain(OPS.paintImageXObject)
+    expect(
+      operators.fnArray.filter((operator) => operator === OPS.constructPath).length,
+    ).toBeGreaterThanOrEqual(2)
   }
 
+  const materialPage = await pdf.getPage(pdf.numPages)
+  const materialItems = (await materialPage.getTextContent()).items.filter((item) => 'str' in item)
+  const materialText = materialItems.map((item) => ('str' in item ? item.str : '')).join(' ')
+  expect(materialText).toContain('材料清单')
+  expect(materialText).toContain('色号')
+  expect(materialText).toContain('使用数量')
+  expect(materialText).toContain('建议准备数量')
+  for (const paletteIndex of usedPaletteIndices) {
+    const entry = MARD_291_PALETTE.entries.find((item) => item.paletteIndex === paletteIndex)
+    if (!entry) throw new Error(`Grid contains unsupported MARD palette index ${paletteIndex}`)
+    const actualCount = gridValues.filter((value) => value === paletteIndex).length
+    const suggestedCount = actualCount + Math.ceil(actualCount / 20)
+    expect(materialText).toContain(entry.displayCode)
+    expect(materialText).toContain(entry.name)
+    const rowTexts = new Map<number, string[]>()
+    for (const item of materialItems) {
+      if (!('str' in item) || !item.str.trim() || !('transform' in item)) continue
+      const y = Math.round(item.transform[5]!)
+      const existing = rowTexts.get(y) ?? []
+      existing.push(item.str.trim())
+      rowTexts.set(y, existing)
+    }
+    const matchingRow = [...rowTexts.values()]
+      .map((parts) => parts.join('|'))
+      .find(
+        (rowText) =>
+          rowText.includes(entry.displayCode) &&
+          rowText.includes(entry.name) &&
+          rowText.includes(String(actualCount)) &&
+          rowText.includes(String(suggestedCount)),
+      )
+    expect(
+      matchingRow,
+      `Expected material row ${entry.displayCode}/${actualCount}/${suggestedCount}; rows: ${JSON.stringify(
+        [...rowTexts.values()],
+      )}`,
+    ).toBeDefined()
+  }
+  expect(materialText).not.toContain('EMPTY')
+
+  expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
+    gridBeforeExport,
+  )
+  await expect(page.getByTestId('editor-grid')).toHaveAttribute('data-revision', '0')
+})
+
+test('TASK-085 warns about small manually selected cells but still exports with confirmed counts', async ({
+  page,
+}) => {
+  await clearActiveSessionDatabase(page)
+  await uploadGenerationFixture(page)
+  await page.getByTestId('grid-width-preset-64').click()
+  const generationStartedAt = await page.evaluate(() => Date.now())
+  await page.getByTestId('generate').click()
+  await assertCommittedGrid(page, 64, 48, generationStartedAt)
+  const gridBeforeExport = await page
+    .getByTestId('editor-grid')
+    .getAttribute('data-palette-indices')
+
+  await page.getByTestId('pdf-manual-columns').fill('70')
+  await page.getByTestId('pdf-manual-rows').fill('60')
+  await expect(page.getByTestId('pdf-pagination-estimate')).toContainText('预计 1 页')
+  await expect(page.getByTestId('pdf-readability-warning')).toBeVisible()
+  const exportButton = page.getByTestId('export-pdf-pagination-preview')
+  await expect(exportButton).toBeEnabled()
+
+  const downloadPromise = page.waitForEvent('download')
+  await exportButton.click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('task037-local_64x48.pdf')
+  const path = await download.path()
+  if (!path) throw new Error('Expected the manually paginated PDF to have a file path.')
+  const { readFile } = await import('node:fs/promises')
+  const pdfBytes = await readFile(path)
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const pdf = await getDocument({ data: new Uint8Array(pdfBytes) }).promise
+  const { derivePdfMaterialsRowsPerPage } = await import('../../src/features/export/pdf/materials')
+  const manualGridValues = await readCurrentGridCells(page)
+  const manualUsedColors = [
+    ...new Set(manualGridValues.filter((paletteIndex) => paletteIndex !== 0)),
+  ]
+  const manualMaterialsPages = Math.max(
+    1,
+    Math.ceil(manualUsedColors.length / derivePdfMaterialsRowsPerPage()),
+  )
+  // One overview + exactly one manually configured range page + the final materials page(s).
+  expect(pdf.numPages).toBe(2 + manualMaterialsPages)
+  const manualPage = await pdf.getPage(2)
+  const manualText = (await manualPage.getTextContent()).items
+    .filter((item) => 'str' in item)
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ')
+  expect(manualText).toContain('每页推荐 70 列 × 60 行')
+  expect(manualText).toContain('Rows 0-47')
+  expect(manualText).toContain('columns 0-63')
   expect(await page.getByTestId('editor-grid').getAttribute('data-palette-indices')).toBe(
     gridBeforeExport,
   )

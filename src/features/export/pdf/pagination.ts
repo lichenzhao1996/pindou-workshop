@@ -50,8 +50,10 @@ function createCandidate(
   orientation: Exclude<PdfOrientation, 'auto'>,
 ): PaginationCandidate {
   const geometry = derivePdfPageGeometry(input, orientation)
-  const columnsPerPage = Math.floor(geometry.contentWidthMm / input.targetCellMm)
-  const rowsPerPage = Math.floor(geometry.contentHeightMm / input.targetCellMm)
+  const columnsPerPage =
+    input.manualCells?.columns ?? Math.floor(geometry.contentWidthMm / input.targetCellMm)
+  const rowsPerPage =
+    input.manualCells?.rows ?? Math.floor(geometry.contentHeightMm / input.targetCellMm)
   if (columnsPerPage < 1 || rowsPerPage < 1) {
     throw new RangeError('PDF target cell size does not fit inside the A4 printable area')
   }

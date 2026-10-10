@@ -1,4 +1,5 @@
 import { mmToPdfPoints, PDF_A4_SIZE_MM } from './units'
+import type { ExportSnapshot } from '../snapshot'
 
 export type PdfOrientation = 'auto' | 'portrait' | 'landscape'
 export type PdfColorMode = 'color' | 'monochrome'
@@ -6,6 +7,11 @@ export type PdfColorMode = 'color' | 'monochrome'
 export interface PdfReadableCellRange {
   readonly min: number
   readonly max: number
+}
+
+export interface PdfManualCells {
+  readonly columns: number
+  readonly rows: number
 }
 
 export interface PdfLayoutInput {
@@ -21,6 +27,7 @@ export interface PdfLayoutInput {
   readonly includeMaterials: boolean
   readonly colorMode: PdfColorMode
   readonly wasteRate: number
+  readonly manualCells: PdfManualCells | null
 }
 
 export interface PdfPageGeometry {
@@ -44,13 +51,39 @@ export const PDF_DEFAULT_LAYOUT_INPUT: PdfLayoutInput = Object.freeze({
   includeMaterials: true,
   colorMode: 'color',
   wasteRate: 0.05,
+  manualCells: null,
 })
+
+export const PDF_MANUAL_COLUMNS_EXPORT_OPTION = 'pdfManualColumnsPerPage'
+export const PDF_MANUAL_ROWS_EXPORT_OPTION = 'pdfManualRowsPerPage'
 
 export function createDefaultPdfLayoutInput(): PdfLayoutInput {
   return {
     ...PDF_DEFAULT_LAYOUT_INPUT,
     readableCellMmRange: { ...PDF_DEFAULT_LAYOUT_INPUT.readableCellMmRange },
   }
+}
+
+/** Applies only pagination settings explicitly confirmed into the immutable export snapshot. */
+export function createPdfLayoutInputFromSnapshot(snapshot: ExportSnapshot): PdfLayoutInput {
+  const input = createDefaultPdfLayoutInput()
+  const columns = snapshot.exportOptions[PDF_MANUAL_COLUMNS_EXPORT_OPTION]
+  const rows = snapshot.exportOptions[PDF_MANUAL_ROWS_EXPORT_OPTION]
+  if (columns === undefined && rows === undefined) return input
+  if (columns === null && rows === null) return input
+  if (
+    typeof columns !== 'number' ||
+    !Number.isSafeInteger(columns) ||
+    columns <= 0 ||
+    typeof rows !== 'number' ||
+    !Number.isSafeInteger(rows) ||
+    rows <= 0
+  ) {
+    throw new RangeError(
+      'Confirmed PDF pagination settings must contain positive integer columns and rows',
+    )
+  }
+  return { ...input, manualCells: { columns, rows } }
 }
 
 export function assertValidPdfLayoutInput(input: PdfLayoutInput): void {
@@ -70,6 +103,15 @@ export function assertValidPdfLayoutInput(input: PdfLayoutInput): void {
   }
   if (!Number.isFinite(input.wasteRate) || input.wasteRate < 0 || input.wasteRate > 1) {
     throw new RangeError('PDF waste rate must be between zero and one')
+  }
+  if (
+    input.manualCells !== null &&
+    (!Number.isSafeInteger(input.manualCells.columns) ||
+      input.manualCells.columns <= 0 ||
+      !Number.isSafeInteger(input.manualCells.rows) ||
+      input.manualCells.rows <= 0)
+  ) {
+    throw new RangeError('Manual PDF cells per page must be positive safe integers')
   }
 }
 

@@ -32,22 +32,35 @@
     >
       {{ isExporting ? '正在生成 PDF…' : '导出 PDF 分页预览' }}
     </button>
-    <PdfLayoutSummary />
+    <PdfLayoutSummary v-model:manual-cells="manualCells" :grid="project?.grid ?? null" />
     <p v-if="exportError" role="alert" data-testid="export-error">{{ exportError }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import type { Project } from '../../../domain/project/types'
 import { downloadEffectPreviewPng } from '../../export/png/effect-preview'
 import { downloadReferencePng } from '../../export/png/reference-guide'
 import { createExportSnapshot } from '../../export/snapshot'
+import {
+  PDF_MANUAL_COLUMNS_EXPORT_OPTION,
+  PDF_MANUAL_ROWS_EXPORT_OPTION,
+  type PdfManualCells,
+} from '../../export/pdf/layout'
 import PdfLayoutSummary from './PdfLayoutSummary.vue'
 
 const props = defineProps<{ project: Project | null }>()
 const isExporting = ref(false)
 const exportError = ref('')
+const manualCells = ref<PdfManualCells | null>(null)
+
+watch(
+  () => props.project?.projectId,
+  () => {
+    manualCells.value = null
+  },
+)
 
 async function exportEffectPreview() {
   const project = props.project
@@ -108,7 +121,10 @@ async function exportPdfPaginationPreview() {
   isExporting.value = true
   exportError.value = ''
   try {
-    const snapshot = createExportSnapshot(project)
+    const snapshot = createExportSnapshot(project, {
+      [PDF_MANUAL_COLUMNS_EXPORT_OPTION]: manualCells.value?.columns ?? null,
+      [PDF_MANUAL_ROWS_EXPORT_OPTION]: manualCells.value?.rows ?? null,
+    })
     const { downloadPdfPaginationPreview } = await import('../../export/pdf/pagination-preview')
     await downloadPdfPaginationPreview(snapshot)
   } catch (error) {

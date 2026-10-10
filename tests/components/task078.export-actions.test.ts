@@ -149,4 +149,25 @@ describe('TASK-078 export actions component', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain('PDF 分页预览生成失败')
     wrapper.unmount()
   })
+
+  it('captures confirmed manual pagination settings in the Export Snapshot without blocking warning exports', async () => {
+    const wrapper = mount(EditorExportActions, { props: { project: projectWithGrid([1]) } })
+    await wrapper.get('[data-testid="pdf-manual-columns"]').setValue('70')
+    await wrapper.get('[data-testid="pdf-manual-rows"]').setValue('60')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="pdf-readability-warning"]').exists()).toBe(true)
+    const exportButton = wrapper.get('[data-testid="export-pdf-pagination-preview"]')
+    expect(exportButton.attributes('disabled')).toBeUndefined()
+    await exportButton.trigger('click')
+    await flushPromises()
+
+    expect(downloadPdfPaginationPreview).toHaveBeenCalledTimes(1)
+    const snapshot = vi.mocked(downloadPdfPaginationPreview).mock.calls[0]![0]
+    expect(snapshot.exportOptions).toMatchObject({
+      pdfManualColumnsPerPage: 70,
+      pdfManualRowsPerPage: 60,
+    })
+    wrapper.unmount()
+  })
 })
