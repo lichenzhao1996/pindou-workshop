@@ -370,7 +370,9 @@ export class GenerationWorkerClient {
   cancel(): void {
     const pending = this.pending
     this.pending = null
-    pending?.reject(new GenerationRequestCancelledError())
+    if (!pending) return
+    pending.reject(new GenerationRequestCancelledError())
+    this.disposeWorker()
   }
 
   dispose(): void {

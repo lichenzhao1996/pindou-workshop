@@ -57,7 +57,9 @@ function friendlyRecoveryError(error: unknown): string {
   const name = error instanceof Error ? error.name : ''
   if (name === 'ActiveSessionStoreError') {
     const code = (error as { code?: string }).code
-    if (code === 'unavailable') return '当前浏览器无法使用本地存储，暂时不能安全恢复作品。'
+    if (code === 'unavailable' || code === 'database-open-failed') {
+      return '本地存储暂时无法使用，当前作品无法安全恢复。原记录未删除，请检查浏览器存储权限后重试。'
+    }
     if (code === 'incompatible-database-version') {
       return '本地作品由较新版本保存，当前版本无法安全读取。'
     }
