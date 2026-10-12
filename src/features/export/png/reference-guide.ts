@@ -6,6 +6,7 @@ import type { Grid } from '../../../domain/project/grid'
 import { deriveUsedColorRowsFromStats } from '../../editor/color-management'
 import { assertSupportedExportPalette, type ExportSnapshot } from '../snapshot'
 import { downloadBlob } from '../download'
+import { encodeCanvasPngAndRelease } from './canvas-blob'
 import {
   MAX_EFFECT_PREVIEW_CANVAS_DIMENSION,
   MAX_EFFECT_PREVIEW_CANVAS_PIXELS,
@@ -132,7 +133,11 @@ export function renderReferencePngCanvas(
   canvas.width = layout.canvasWidth
   canvas.height = layout.canvasHeight
   const context = canvas.getContext('2d')
-  if (!context) throw new Error('Canvas 2D context is unavailable')
+  if (!context) {
+    canvas.width = 0
+    canvas.height = 0
+    throw new Error('Canvas 2D context is unavailable')
+  }
   context.scale(layout.scale, layout.scale)
   context.fillStyle = '#ffffff'
   context.fillRect(0, 0, layout.canvasWidth / layout.scale, layout.canvasHeight / layout.scale)
@@ -267,19 +272,7 @@ export function createReferencePngBlob(
   canvasFactory: ReferencePngCanvasFactory = createCanvas,
 ): Promise<Blob> {
   const canvas = renderReferencePngCanvas(snapshot, canvasFactory)
-  return new Promise((resolve, reject) => {
-    try {
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          reject(new Error('Canvas could not encode the reference guide as PNG'))
-          return
-        }
-        resolve(blob)
-      }, 'image/png')
-    } catch (error) {
-      reject(error)
-    }
-  })
+  return encodeCanvasPngAndRelease(canvas, 'Canvas could not encode the reference guide as PNG')
 }
 
 export async function downloadReferencePng(

@@ -103,6 +103,8 @@ describe('TASK-078 effect preview PNG', () => {
     const blob = new Blob(['valid png payload'], { type: 'image/png' })
     const harness = createCanvasHarness(blob)
     await expect(createEffectPreviewPngBlob(snapshot, () => harness.canvas)).resolves.toBe(blob)
+    expect(harness.canvas.width).toBe(0)
+    expect(harness.canvas.height).toBe(0)
 
     const noContext = {
       width: 0,
@@ -117,6 +119,8 @@ describe('TASK-078 effect preview PNG', () => {
     await expect(createEffectPreviewPngBlob(snapshot, () => failedEncoding.canvas)).rejects.toThrow(
       'could not encode',
     )
+    expect(failedEncoding.canvas.width).toBe(0)
+    expect(failedEncoding.canvas.height).toBe(0)
   })
 
   it('rejects a palette version the renderer cannot faithfully draw', () => {

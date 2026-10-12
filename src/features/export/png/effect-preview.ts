@@ -4,6 +4,7 @@ import { EMPTY } from '../../../domain/project/constants'
 import type { Grid } from '../../../domain/project/grid'
 import { assertSupportedExportPalette, type ExportSnapshot } from '../snapshot'
 import { downloadBlob } from '../download'
+import { encodeCanvasPngAndRelease } from './canvas-blob'
 
 export const EFFECT_PREVIEW_CELL_SIZE = 32
 export const EFFECT_PREVIEW_PADDING = 32
@@ -71,7 +72,11 @@ export function renderEffectPreviewCanvas(
   canvas.width = layout.canvasWidth
   canvas.height = layout.canvasHeight
   const context = canvas.getContext('2d')
-  if (!context) throw new Error('Canvas 2D context is unavailable')
+  if (!context) {
+    canvas.width = 0
+    canvas.height = 0
+    throw new Error('Canvas 2D context is unavailable')
+  }
 
   context.fillStyle = '#f4f1eb'
   context.fillRect(0, 0, canvas.width, canvas.height)
@@ -152,19 +157,7 @@ export function createEffectPreviewPngBlob(
   canvasFactory: EffectPreviewCanvasFactory = createCanvas,
 ): Promise<Blob> {
   const canvas = renderEffectPreviewCanvas(snapshot, canvasFactory)
-  return new Promise((resolve, reject) => {
-    try {
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          reject(new Error('Canvas could not encode the effect preview as PNG'))
-          return
-        }
-        resolve(blob)
-      }, 'image/png')
-    } catch (error) {
-      reject(error)
-    }
-  })
+  return encodeCanvasPngAndRelease(canvas, 'Canvas could not encode the effect preview as PNG')
 }
 
 export async function downloadEffectPreviewPng(snapshot: ExportSnapshot): Promise<void> {

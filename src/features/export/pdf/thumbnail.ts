@@ -4,6 +4,7 @@ import type { Grid } from '../../../domain/project/grid'
 import type { ExportSnapshot } from '../snapshot'
 import { assertSupportedExportPalette } from '../snapshot'
 import type { PdfGridRange } from './pagination'
+import { encodeCanvasPngAndRelease } from '../png/canvas-blob'
 
 export interface PdfThumbnailRangeRect {
   readonly x: number
@@ -52,22 +53,6 @@ function createCanvas(): HTMLCanvasElement {
   return document.createElement('canvas')
 }
 
-function encodeCanvas(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    try {
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          reject(new Error('PDF Grid thumbnail could not be encoded as PNG'))
-          return
-        }
-        resolve(blob)
-      }, 'image/png')
-    } catch (error) {
-      reject(error)
-    }
-  })
-}
-
 /** Draws a low-resolution image from the immutable Grid snapshot; EMPTY has a distinct neutral tone. */
 export async function createPdfGridThumbnailPng(
   snapshot: ExportSnapshot,
@@ -86,7 +71,11 @@ export async function createPdfGridThumbnailPng(
   canvas.width = width
   canvas.height = height
   const context = canvas.getContext('2d')
-  if (!context) throw new Error('PDF Grid thumbnail Canvas 2D context is unavailable')
+  if (!context) {
+    canvas.width = 0
+    canvas.height = 0
+    throw new Error('PDF Grid thumbnail Canvas 2D context is unavailable')
+  }
 
   const image = context.createImageData(width, height)
   for (let y = 0; y < height; y += 1) {
@@ -110,6 +99,9 @@ export async function createPdfGridThumbnailPng(
     }
   }
   context.putImageData(image, 0, 0)
-  const blob = await encodeCanvas(canvas)
+  const blob = await encodeCanvasPngAndRelease(
+    canvas,
+    'PDF Grid thumbnail could not be encoded as PNG',
+  )
   return new Uint8Array(await blob.arrayBuffer())
 }

@@ -128,6 +128,8 @@ describe('TASK-079 reference PNG', () => {
     const harness = createCanvasHarness()
     const blob = await createReferencePngBlob(snapshot, harness.factory)
     expect(blob.type).toBe('image/png')
+    expect(harness.canvas.width).toBe(0)
+    expect(harness.canvas.height).toBe(0)
 
     const downloadBlob = await import('../../src/features/export/download')
     const spy = vi.spyOn(downloadBlob, 'downloadBlob').mockImplementation(() => {})
@@ -146,9 +148,13 @@ describe('TASK-079 reference PNG', () => {
 
     const noBlob = {
       ...createCanvasHarness().canvas,
+      width: 16,
+      height: 16,
       toBlob: (callback: BlobCallback) => callback(null),
     } as unknown as HTMLCanvasElement
     await expect(createReferencePngBlob(snapshot, () => noBlob)).rejects.toThrow(/encode/)
+    expect(noBlob.width).toBe(0)
+    expect(noBlob.height).toBe(0)
   })
 
   it('rejects invalid palette indices instead of painting an invented bead color', () => {

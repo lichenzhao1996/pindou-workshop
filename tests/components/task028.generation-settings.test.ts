@@ -198,4 +198,26 @@ describe('TASK-028 generation settings', () => {
 
     wrapper.unmount()
   })
+
+  it('keeps the extreme-ratio notice but adds no total-Grid-count warning or hard limit', async () => {
+    const { wrapper } = await mountCropView()
+    await wrapper.get('[data-testid="grid-width-input"]').setValue('256')
+    cropperMock.instances[0].emitCrop({
+      x: 0,
+      y: 0,
+      width: 96,
+      height: 480,
+      rotate: 0,
+      scaleX: 1,
+      scaleY: 1,
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="grid-bead-dimensions"]').text()).toContain('256 × 1280 颗')
+    expect(wrapper.get('[data-testid="generation-warnings"]').text()).toContain('作品比例较极端')
+    expect(wrapper.text()).not.toMatch(/总格数|格数上限|性能限制/)
+    expect(wrapper.get('[data-testid="crop-confirm"]').attributes('disabled')).toBeUndefined()
+
+    wrapper.unmount()
+  })
 })
